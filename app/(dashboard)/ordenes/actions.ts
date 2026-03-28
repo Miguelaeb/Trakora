@@ -249,13 +249,56 @@ export async function deleteOrderAction(formData: FormData) {
     return { error: "ID inválido" };
   }
 
-  await sql`DELETE FROM order_tools WHERE order_id = ${parseInt(id)}`;
-  await sql`DELETE FROM order_materials WHERE order_id = ${parseInt(id)}`;
-  await sql`DELETE FROM service_orders WHERE id = ${parseInt(id)}`;
+  const orderId = parseInt(id);
+
+  if (Number.isNaN(orderId)) {
+    return { error: "ID inválido" };
+  }
+
+  const activeTools = await sql`
+    SELECT tool_id
+    FROM order_tools
+    WHERE order_id = ${orderId}
+      AND returned_at IS NULL
+  `;
+
+  for (const tool of activeTools) {
+    await sql`
+      UPDATE tools
+      SET
+        status = 'available',
+        updated_at = NOW()
+      WHERE id = ${tool.tool_id}
+    `;
+  }
+
+  const usedMaterials = await sql`
+    SELECT material_id, quantity_used
+    FROM order_materials
+    WHERE order_id = ${orderId}
+  `;
+
+  for (const material of usedMaterials) {
+    await sql`
+      UPDATE materials
+      SET
+        quantity_in_stock = quantity_in_stock + ${material.quantity_used},
+        updated_at = NOW()
+      WHERE id = ${material.material_id}
+    `;
+  }
+
+  await sql`DELETE FROM order_tools WHERE order_id = ${orderId}`;
+  await sql`DELETE FROM order_materials WHERE order_id = ${orderId}`;
+  await sql`DELETE FROM tool_requests WHERE order_id = ${orderId}`;
+  await sql`DELETE FROM material_requests WHERE order_id = ${orderId}`;
+  await sql`DELETE FROM service_orders WHERE id = ${orderId}`;
 
   revalidatePath("/ordenes");
   revalidatePath("/dashboard");
   revalidatePath("/historial");
+  revalidatePath("/herramientas");
+  revalidatePath("/materiales");
 
   return { success: true };
 }
@@ -356,7 +399,7 @@ export async function requestToolForOrderAction(formData: FormData) {
 }
 
 export async function assignToolToOrderAction(formData: FormData) {
-  return requestToolForOrderAction(formData);
+  return assignToolToOrderDirectAction(formData);
 }
 
 export async function requestToolReturnAction(formData: FormData) {
@@ -521,48 +564,6 @@ export async function rejectToolReturnAction(formData: FormData) {
   return { success: true };
 }
 
-export async function assignMaterialToOrderAction(formData: FormData) {
-  await requireAuth();
-
-  const orderId = formData.get("order_id") as string;
-  const materialId = formData.get("material_id") as string;
-  const quantity = formData.get("quantity") as string;
-
-  if (!orderId || !materialId || !quantity) {
-    return { error: "Datos inválidos" };
-  }
-
-  const qty = parseInt(quantity);
-  if (qty <= 0) {
-    return { error: "La cantidad debe ser mayor a cero" };
-  }
-
-  const material = await sql`
-    SELECT quantity_in_stock
-    FROM materials
-    WHERE id = ${parseInt(materialId)}
-  `;
-
-  if (material.length === 0 || material[0].quantity_in_stock < qty) {
-    return { error: "Stock insuficiente" };
-  }
-
-  await sql`
-    INSERT INTO order_materials (order_id, material_id, quantity_used)
-    VALUES (${parseInt(orderId)}, ${parseInt(materialId)}, ${qty})
-  `;
-
-  await sql`
-    UPDATE materials
-    SET quantity_in_stock = quantity_in_stock - ${qty}
-    WHERE id = ${parseInt(materialId)}
-  `;
-
-  revalidatePath(`/ordenes/${orderId}`);
-
-  return { success: true };
-}
-
 export async function returnToolAction(formData: FormData) {
   const user = await requireAuth();
 
@@ -661,17 +662,18 @@ export async function approveToolRequestAction(formData: FormData) {
     return { error: "La herramienta ya no está disponible" };
   }
 
-  const existingActiveAssignment = await sql`
-    SELECT id
+  const existingAssignment = await sql`
+    SELECT id, returned_at
     FROM order_tools
     WHERE order_id = ${currentRequest.order_id}
       AND tool_id = ${currentRequest.tool_id}
-      AND returned_at IS NULL
     LIMIT 1
   `;
 
-  if (existingActiveAssignment.length > 0) {
-    return { error: "La herramienta ya está asignada a esta orden" };
+  if (existingAssignment.length > 0) {
+    return {
+      error: "La herramienta ya fue registrada anteriormente en esta orden",
+    };
   }
 
   await sql`
@@ -771,4 +773,437 @@ export async function rejectToolRequestAction(formData: FormData) {
   revalidatePath("/herramientas");
 
   return { success: true };
+}
+
+//Materiales//
+
+export async function requestMaterialForOrderAction(formData: FormData) {
+  const user = await requireAuth();
+
+  const orderId = formData.get("order_id") as string;
+  const materialId = formData.get("material_id") as string;
+  const quantity = formData.get("quantity") as string;
+  const justification = (formData.get("justification") as string)?.trim();
+
+  if (!orderId || !materialId || !quantity || !justification) {
+    return { error: "Debe completar todos los campos requeridos" };
+  }
+
+  const parsedOrderId = parseInt(orderId);
+  const parsedMaterialId = parseInt(materialId);
+  const qty = Number(quantity);
+
+  if (
+    Number.isNaN(parsedOrderId) ||
+    Number.isNaN(parsedMaterialId) ||
+    Number.isNaN(qty)
+  ) {
+    return { error: "Datos inválidos" };
+  }
+
+  if (qty <= 0) {
+    return { error: "La cantidad debe ser mayor a cero" };
+  }
+
+  const order = await sql`
+    SELECT id, assigned_to, status
+    FROM service_orders
+    WHERE id = ${parsedOrderId}
+    LIMIT 1
+  `;
+
+  if (order.length === 0) {
+    return { error: "Orden no encontrada" };
+  }
+
+  const currentOrder = order[0];
+
+  if (["completed", "cancelled"].includes(currentOrder.status)) {
+    return { error: "No se pueden solicitar materiales para esta orden" };
+  }
+
+  if (user.role !== "admin" && currentOrder.assigned_to !== user.id) {
+    return {
+      error: "No tiene permiso para solicitar materiales en esta orden",
+    };
+  }
+
+  const material = await sql`
+    SELECT id, quantity_in_stock
+    FROM materials
+    WHERE id = ${parsedMaterialId}
+    LIMIT 1
+  `;
+
+  if (material.length === 0) {
+    return { error: "Material no encontrado" };
+  }
+
+  if (Number(material[0].quantity_in_stock) <= 0) {
+    return { error: "Este material no tiene stock disponible" };
+  }
+
+  const existingPendingRequest = await sql`
+    SELECT id
+    FROM material_requests
+    WHERE order_id = ${parsedOrderId}
+      AND material_id = ${parsedMaterialId}
+      AND status = 'pending'
+    LIMIT 1
+  `;
+
+  if (existingPendingRequest.length > 0) {
+    return { error: "Ya existe una solicitud pendiente para este material" };
+  }
+
+  await sql`
+    INSERT INTO material_requests (
+      order_id,
+      material_id,
+      quantity_requested,
+      justification,
+      status,
+      requested_by
+    )
+    VALUES (
+      ${parsedOrderId},
+      ${parsedMaterialId},
+      ${qty},
+      ${justification},
+      'pending',
+      ${user.id}
+    )
+  `;
+
+  revalidatePath("/ordenes");
+  revalidatePath(`/ordenes/${parsedOrderId}`);
+  revalidatePath("/dashboard");
+  revalidatePath("/materiales");
+
+  return { success: true };
+}
+
+export async function approveMaterialRequestAction(formData: FormData) {
+  const user = await requireAdmin();
+
+  const requestId = formData.get("request_id") as string;
+
+  if (!requestId) {
+    return { error: "Datos inválidos" };
+  }
+
+  const parsedRequestId = parseInt(requestId);
+
+  if (Number.isNaN(parsedRequestId)) {
+    return { error: "Datos inválidos" };
+  }
+
+  const request = await sql`
+    SELECT
+      mr.id,
+      mr.order_id,
+      mr.material_id,
+      mr.quantity_requested,
+      mr.status,
+      m.quantity_in_stock
+    FROM material_requests mr
+    JOIN materials m ON m.id = mr.material_id
+    WHERE mr.id = ${parsedRequestId}
+    LIMIT 1
+  `;
+
+  if (request.length === 0) {
+    return { error: "Solicitud no encontrada" };
+  }
+
+  const currentRequest = request[0];
+  const requestedQty = Number(currentRequest.quantity_requested);
+  const stock = Number(currentRequest.quantity_in_stock);
+
+  if (currentRequest.status !== "pending") {
+    return { error: "La solicitud ya fue procesada" };
+  }
+
+  if (requestedQty <= 0) {
+    return { error: "La cantidad solicitada es inválida" };
+  }
+
+  if (stock < requestedQty) {
+    return { error: "Stock insuficiente para aprobar esta solicitud" };
+  }
+
+  await sql`
+    UPDATE material_requests
+    SET
+      status = 'approved',
+      reviewed_by = ${user.id},
+      reviewed_at = NOW(),
+      rejection_reason = NULL,
+      updated_at = NOW()
+    WHERE id = ${parsedRequestId}
+  `;
+
+  await sql`
+    UPDATE materials
+    SET
+      quantity_in_stock = quantity_in_stock - ${requestedQty},
+      updated_at = NOW()
+    WHERE id = ${currentRequest.material_id}
+  `;
+
+  await sql`
+    INSERT INTO order_materials (
+      order_id,
+      material_id,
+      quantity_used
+    )
+    VALUES (
+      ${currentRequest.order_id},
+      ${currentRequest.material_id},
+      ${requestedQty}
+    )
+  `;
+
+  revalidatePath("/ordenes");
+  revalidatePath(`/ordenes/${currentRequest.order_id}`);
+  revalidatePath("/dashboard");
+  revalidatePath("/materiales");
+
+  return { success: true };
+}
+
+export async function rejectMaterialRequestAction(formData: FormData) {
+  const user = await requireAdmin();
+
+  const requestId = formData.get("request_id") as string;
+  const rejectionReason =
+    (formData.get("rejection_reason") as string)?.trim() || null;
+
+  if (!requestId) {
+    return { error: "Datos inválidos" };
+  }
+
+  const parsedRequestId = parseInt(requestId);
+
+  if (Number.isNaN(parsedRequestId)) {
+    return { error: "Datos inválidos" };
+  }
+
+  const request = await sql`
+    SELECT id, order_id, status
+    FROM material_requests
+    WHERE id = ${parsedRequestId}
+    LIMIT 1
+  `;
+
+  if (request.length === 0) {
+    return { error: "Solicitud no encontrada" };
+  }
+
+  const currentRequest = request[0];
+
+  if (currentRequest.status !== "pending") {
+    return { error: "La solicitud ya fue procesada" };
+  }
+
+  await sql`
+    UPDATE material_requests
+    SET
+      status = 'rejected',
+      rejection_reason = ${rejectionReason},
+      reviewed_by = ${user.id},
+      reviewed_at = NOW(),
+      updated_at = NOW()
+    WHERE id = ${parsedRequestId}
+  `;
+
+  revalidatePath("/ordenes");
+  revalidatePath(`/ordenes/${currentRequest.order_id}`);
+  revalidatePath("/dashboard");
+  revalidatePath("/materiales");
+
+  return { success: true };
+}
+
+export async function addMaterialToOrderDirectAction(formData: FormData) {
+  await requireAdmin();
+
+  const orderId = formData.get("order_id") as string;
+  const materialId = formData.get("material_id") as string;
+  const quantity = formData.get("quantity") as string;
+
+  if (!orderId || !materialId || !quantity) {
+    return { error: "Datos inválidos" };
+  }
+
+  const parsedOrderId = parseInt(orderId);
+  const parsedMaterialId = parseInt(materialId);
+  const qty = Number(quantity);
+
+  if (
+    Number.isNaN(parsedOrderId) ||
+    Number.isNaN(parsedMaterialId) ||
+    Number.isNaN(qty)
+  ) {
+    return { error: "Datos inválidos" };
+  }
+
+  if (qty <= 0) {
+    return { error: "La cantidad debe ser mayor a cero" };
+  }
+
+  const order = await sql`
+    SELECT id, status
+    FROM service_orders
+    WHERE id = ${parsedOrderId}
+    LIMIT 1
+  `;
+
+  if (order.length === 0) {
+    return { error: "Orden no encontrada" };
+  }
+
+  if (["completed", "cancelled"].includes(order[0].status)) {
+    return { error: "No se pueden agregar materiales a esta orden" };
+  }
+
+  const material = await sql`
+    SELECT id, quantity_in_stock
+    FROM materials
+    WHERE id = ${parsedMaterialId}
+    LIMIT 1
+  `;
+
+  if (material.length === 0) {
+    return { error: "Material no encontrado" };
+  }
+
+  if (Number(material[0].quantity_in_stock) < qty) {
+    return { error: "Stock insuficiente" };
+  }
+
+  await sql`
+    INSERT INTO order_materials (
+      order_id,
+      material_id,
+      quantity_used
+    )
+    VALUES (
+      ${parsedOrderId},
+      ${parsedMaterialId},
+      ${qty}
+    )
+  `;
+
+  await sql`
+    UPDATE materials
+    SET
+      quantity_in_stock = quantity_in_stock - ${qty},
+      updated_at = NOW()
+    WHERE id = ${parsedMaterialId}
+  `;
+
+  revalidatePath("/ordenes");
+  revalidatePath(`/ordenes/${parsedOrderId}`);
+  revalidatePath("/dashboard");
+  revalidatePath("/materiales");
+
+  return { success: true };
+}
+
+export async function assignToolToOrderDirectAction(formData: FormData) {
+  const user = await requireAdmin();
+
+  const orderId = formData.get("order_id") as string;
+  const toolId = formData.get("tool_id") as string;
+
+  if (!orderId || !toolId) {
+    return { error: "Datos inválidos" };
+  }
+
+  const parsedOrderId = parseInt(orderId);
+  const parsedToolId = parseInt(toolId);
+
+  if (Number.isNaN(parsedOrderId) || Number.isNaN(parsedToolId)) {
+    return { error: "Datos inválidos" };
+  }
+
+  const order = await sql`
+    SELECT id, status
+    FROM service_orders
+    WHERE id = ${parsedOrderId}
+    LIMIT 1
+  `;
+
+  if (order.length === 0) {
+    return { error: "Orden no encontrada" };
+  }
+
+  if (["completed", "cancelled"].includes(order[0].status)) {
+    return { error: "No se pueden agregar herramientas a esta orden" };
+  }
+
+  const tool = await sql`
+    SELECT id, status
+    FROM tools
+    WHERE id = ${parsedToolId}
+    LIMIT 1
+  `;
+
+  if (tool.length === 0) {
+    return { error: "Herramienta no encontrada" };
+  }
+
+  if (tool[0].status !== "available") {
+    return { error: "La herramienta no está disponible" };
+  }
+
+  const existingAssignment = await sql`
+    SELECT id
+    FROM order_tools
+    WHERE order_id = ${parsedOrderId}
+      AND tool_id = ${parsedToolId}
+    LIMIT 1
+  `;
+
+  if (existingAssignment.length > 0) {
+    return {
+      error: "La herramienta ya fue registrada anteriormente en esta orden",
+    };
+  }
+
+  await sql`
+    INSERT INTO order_tools (order_id, tool_id)
+    VALUES (${parsedOrderId}, ${parsedToolId})
+  `;
+
+  await sql`
+    UPDATE tools
+    SET
+      status = 'in_use',
+      updated_at = NOW()
+    WHERE id = ${parsedToolId}
+  `;
+
+  await sql`
+    UPDATE tool_requests
+    SET
+      status = 'rejected',
+      rejection_reason = 'La herramienta fue asignada directamente por un administrador',
+      reviewed_by = ${user.id},
+      reviewed_at = NOW()
+    WHERE tool_id = ${parsedToolId}
+      AND status = 'pending'
+  `;
+
+  revalidatePath("/ordenes");
+  revalidatePath(`/ordenes/${parsedOrderId}`);
+  revalidatePath("/dashboard");
+  revalidatePath("/herramientas");
+
+  return { success: true };
+}
+
+export async function assignMaterialToOrderAction(formData: FormData) {
+  return addMaterialToOrderDirectAction(formData);
 }

@@ -128,6 +128,34 @@ async function getOrderMaterials(orderId: number) {
   `;
 }
 
+async function getMaterialRequests(orderId: number) {
+  return sql`
+    SELECT
+      mr.id,
+      mr.order_id,
+      mr.material_id,
+      m.name AS material_name,
+      m.unit AS material_unit,
+      mr.quantity_requested,
+      mr.justification,
+      mr.status,
+      mr.rejection_reason,
+      mr.requested_by,
+      requester.full_name AS requested_by_name,
+      mr.reviewed_by,
+      reviewer.full_name AS reviewed_by_name,
+      mr.reviewed_at,
+      mr.created_at,
+      mr.updated_at
+    FROM material_requests mr
+    JOIN materials m ON m.id = mr.material_id
+    JOIN users requester ON requester.id = mr.requested_by
+    LEFT JOIN users reviewer ON reviewer.id = mr.reviewed_by
+    WHERE mr.order_id = ${orderId}
+    ORDER BY mr.created_at DESC
+  `;
+}
+
 async function getAvailableTools() {
   return sql`
     SELECT id, name
@@ -164,9 +192,12 @@ export default async function OrderDetailPage({ params }: PageProps) {
   }
 
   const isAdmin = session.user.role === "admin";
+
   if (!isAdmin && order.assigned_to !== session.user.id) {
     redirect("/ordenes");
   }
+
+  const canEditOrder = !["completed", "cancelled"].includes(order.status);
 
   const [
     orderTools,
@@ -174,12 +205,14 @@ export default async function OrderDetailPage({ params }: PageProps) {
     availableTools,
     availableMaterials,
     toolRequests,
+    materialRequests,
   ] = await Promise.all([
     getOrderTools(orderId),
     getOrderMaterials(orderId),
     getAvailableTools(),
     getAvailableMaterials(),
     getToolRequests(orderId),
+    getMaterialRequests(orderId),
   ]);
 
   return (
@@ -191,21 +224,26 @@ export default async function OrderDetailPage({ params }: PageProps) {
               <ArrowLeft className="size-4" />
             </Link>
           </Button>
+
           <div>
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-bold tracking-tight">
                 {order.order_number}
               </h1>
+
               <Badge className={`${statusColors[order.status]} border-0`}>
                 {statusLabels[order.status]}
               </Badge>
+
               <Badge className={`${priorityColors[order.priority]} border-0`}>
                 {priorityLabels[order.priority]}
               </Badge>
             </div>
+
             <p className="text-muted-foreground">{order.client_name}</p>
           </div>
         </div>
+
         <div className="flex gap-2">
           <Button variant="outline" asChild>
             <Link href={`/reportes/orden/${order.id}`}>
@@ -213,6 +251,7 @@ export default async function OrderDetailPage({ params }: PageProps) {
               Imprimir
             </Link>
           </Button>
+
           {isAdmin && (
             <Button asChild>
               <Link href={`/ordenes/${order.id}/editar`}>
@@ -229,6 +268,7 @@ export default async function OrderDetailPage({ params }: PageProps) {
           <CardHeader>
             <CardTitle>Información del Servicio</CardTitle>
           </CardHeader>
+
           <CardContent className="space-y-4">
             <div>
               <h4 className="mb-1 text-sm font-medium text-muted-foreground">
@@ -255,12 +295,14 @@ export default async function OrderDetailPage({ params }: PageProps) {
                   <span>{order.client_phone}</span>
                 </div>
               )}
+
               {order.client_address && (
                 <div className="flex items-center gap-2">
                   <MapPin className="size-4 text-muted-foreground" />
                   <span>{order.client_address}</span>
                 </div>
               )}
+
               {order.scheduled_date && (
                 <div className="flex items-center gap-2">
                   <Calendar className="size-4 text-muted-foreground" />
@@ -270,6 +312,7 @@ export default async function OrderDetailPage({ params }: PageProps) {
                   </span>
                 </div>
               )}
+
               {order.technician_name && (
                 <div className="flex items-center gap-2">
                   <User className="size-4 text-muted-foreground" />
@@ -284,11 +327,13 @@ export default async function OrderDetailPage({ params }: PageProps) {
           <CardHeader>
             <CardTitle>Detalles</CardTitle>
           </CardHeader>
+
           <CardContent className="space-y-4">
             <div>
               <p className="text-sm text-muted-foreground">Creado por</p>
               <p className="font-medium">{order.created_by_name}</p>
             </div>
+
             <div>
               <p className="text-sm text-muted-foreground">Fecha de Creación</p>
               <p className="font-medium">
@@ -301,6 +346,7 @@ export default async function OrderDetailPage({ params }: PageProps) {
                 })}
               </p>
             </div>
+
             {order.completed_date && (
               <div>
                 <p className="text-sm text-muted-foreground">
@@ -317,6 +363,7 @@ export default async function OrderDetailPage({ params }: PageProps) {
                 </p>
               </div>
             )}
+
             <div>
               <p className="text-sm text-muted-foreground">
                 Última Actualización
@@ -340,7 +387,7 @@ export default async function OrderDetailPage({ params }: PageProps) {
         orderTools={orderTools}
         availableTools={availableTools}
         toolRequests={toolRequests}
-        canEdit={!["completed", "cancelled"].includes(order.status)}
+        canEdit={canEditOrder}
         isAdmin={isAdmin}
       />
 
@@ -348,7 +395,9 @@ export default async function OrderDetailPage({ params }: PageProps) {
         orderId={orderId}
         orderMaterials={orderMaterials}
         availableMaterials={availableMaterials}
-        canEdit={!["completed", "cancelled"].includes(order.status)}
+        materialRequests={materialRequests}
+        canEdit={canEditOrder}
+        isAdmin={isAdmin}
       />
     </div>
   );
