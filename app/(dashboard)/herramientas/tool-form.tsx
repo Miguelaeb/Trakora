@@ -1,6 +1,9 @@
 "use client";
 
 import { useActionState } from "react";
+import { AlertCircle } from "lucide-react";
+
+import { createToolAction, updateToolAction } from "./actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,8 +15,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AlertCircle } from "lucide-react";
-import { createToolAction, updateToolAction } from "./actions";
 
 interface Tool {
   id: number;
@@ -21,7 +22,7 @@ interface Tool {
   internal_code: string | null;
   category: string | null;
   notes: string | null;
-  status: string;
+  status: "available" | "maintenance" | "lost" | "in_use";
 }
 
 interface ToolFormProps {
@@ -31,6 +32,11 @@ interface ToolFormProps {
 export function ToolForm({ tool }: ToolFormProps) {
   const action = tool ? updateToolAction : createToolAction;
   const [state, formAction, isPending] = useActionState(action, null);
+
+  const defaultStatus =
+    tool?.status && ["available", "maintenance", "lost"].includes(tool.status)
+      ? tool.status
+      : "available";
 
   return (
     <form action={formAction} className="space-y-6">
@@ -49,7 +55,7 @@ export function ToolForm({ tool }: ToolFormProps) {
           <Input
             id="name"
             name="name"
-            defaultValue={tool?.name || ""}
+            defaultValue={tool?.name ?? ""}
             placeholder="Taladro inalámbrico"
             required
             disabled={isPending}
@@ -61,7 +67,7 @@ export function ToolForm({ tool }: ToolFormProps) {
           <Input
             id="internal_code"
             name="internal_code"
-            defaultValue={tool?.internal_code || ""}
+            defaultValue={tool?.internal_code ?? ""}
             placeholder="HR-001"
             disabled={isPending}
           />
@@ -74,7 +80,7 @@ export function ToolForm({ tool }: ToolFormProps) {
           <Input
             id="category"
             name="category"
-            defaultValue={tool?.category || ""}
+            defaultValue={tool?.category ?? ""}
             placeholder="Eléctrica"
             disabled={isPending}
           />
@@ -84,7 +90,7 @@ export function ToolForm({ tool }: ToolFormProps) {
           <Label htmlFor="status">Estado</Label>
           <Select
             name="status"
-            defaultValue={tool?.status || "available"}
+            defaultValue={defaultStatus}
             disabled={isPending}
           >
             <SelectTrigger className="w-full">
@@ -92,11 +98,17 @@ export function ToolForm({ tool }: ToolFormProps) {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="available">Disponible</SelectItem>
-              <SelectItem value="in_use">En uso</SelectItem>
               <SelectItem value="maintenance">Mantenimiento</SelectItem>
               <SelectItem value="lost">Pérdida</SelectItem>
             </SelectContent>
           </Select>
+
+          {tool?.status === "in_use" && (
+            <p className="text-xs text-muted-foreground">
+              Esta herramienta está en uso. Ese estado se gestiona
+              automáticamente desde las órdenes y solicitudes.
+            </p>
+          )}
         </div>
       </div>
 
@@ -105,7 +117,7 @@ export function ToolForm({ tool }: ToolFormProps) {
         <Textarea
           id="notes"
           name="notes"
-          defaultValue={tool?.notes || ""}
+          defaultValue={tool?.notes ?? ""}
           placeholder="Notas de la herramienta..."
           rows={3}
           disabled={isPending}

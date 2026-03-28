@@ -49,9 +49,12 @@ import {
   XCircle,
   Eye,
 } from "lucide-react";
+import { deleteToolAction } from "./actions";
 import {
   approveToolReturnAction,
   rejectToolReturnAction,
+  approveToolRequestAction,
+  rejectToolRequestAction,
 } from "../ordenes/actions";
 
 interface Tool {
@@ -66,6 +69,12 @@ interface Tool {
   order_id: number | null;
   return_status: string | null;
   return_requested_at: string | null;
+  request_id: number | null;
+  request_status: "pending" | "approved" | "rejected" | null;
+  request_date: string | null;
+  requested_by_name: string | null;
+  request_order_id: number | null;
+  rejection_reason: string | null;
 }
 
 interface ToolsTableProps {
@@ -103,6 +112,18 @@ const returnStatusColors: Record<string, string> = {
   rejected: "bg-red-100 text-red-800",
 };
 
+const requestStatusLabels: Record<string, string> = {
+  pending: "Solicitud pendiente",
+  approved: "Solicitud aprobada",
+  rejected: "Solicitud rechazada",
+};
+
+const requestStatusColors: Record<string, string> = {
+  pending: "bg-amber-100 text-amber-800",
+  approved: "bg-green-100 text-green-800",
+  rejected: "bg-red-100 text-red-800",
+};
+
 export function ToolsTable({
   tools,
   initialSearch,
@@ -122,6 +143,9 @@ export function ToolsTable({
   const [error, setError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isProcessingReturn, setIsProcessingReturn] = useState<number | null>(
+    null,
+  );
+  const [isProcessingRequest, setIsProcessingRequest] = useState<number | null>(
     null,
   );
 
@@ -162,7 +186,10 @@ export function ToolsTable({
 
       if (result?.error) {
         setError(result.error);
+        return;
       }
+
+      window.location.reload();
     } catch {
       setError("Ocurrió un error al intentar eliminar la herramienta.");
     } finally {
@@ -185,7 +212,10 @@ export function ToolsTable({
 
       if (result?.error) {
         setError(result.error);
+        return;
       }
+
+      window.location.reload();
     } catch {
       setError("Ocurrió un error al aprobar la devolución.");
     } finally {
@@ -207,11 +237,64 @@ export function ToolsTable({
 
       if (result?.error) {
         setError(result.error);
+        return;
       }
+
+      window.location.reload();
     } catch {
       setError("Ocurrió un error al rechazar la devolución.");
     } finally {
       setIsProcessingReturn(null);
+    }
+  };
+
+  const handleApproveRequest = async (tool: Tool) => {
+    if (!tool.request_id) return;
+
+    try {
+      setIsProcessingRequest(tool.id);
+      setError(null);
+
+      const formData = new FormData();
+      formData.set("tool_request_id", tool.request_id.toString());
+
+      const result = await approveToolRequestAction(formData);
+
+      if (result?.error) {
+        setError(result.error);
+        return;
+      }
+
+      window.location.reload();
+    } catch {
+      setError("Ocurrió un error al aprobar la solicitud.");
+    } finally {
+      setIsProcessingRequest(null);
+    }
+  };
+
+  const handleRejectRequest = async (tool: Tool) => {
+    if (!tool.request_id) return;
+
+    try {
+      setIsProcessingRequest(tool.id);
+      setError(null);
+
+      const formData = new FormData();
+      formData.set("tool_request_id", tool.request_id.toString());
+
+      const result = await rejectToolRequestAction(formData);
+
+      if (result?.error) {
+        setError(result.error);
+        return;
+      }
+
+      window.location.reload();
+    } catch {
+      setError("Ocurrió un error al rechazar la solicitud.");
+    } finally {
+      setIsProcessingRequest(null);
     }
   };
 
@@ -307,7 +390,11 @@ export function ToolsTable({
                   const normalizedStatus = tool.status?.toLowerCase().trim();
                   const normalizedReturnStatus =
                     tool.return_status?.toLowerCase().trim() || null;
+                  const normalizedRequestStatus =
+                    tool.request_status?.toLowerCase().trim() || null;
 
+                  const hasPendingRequest =
+                    normalizedRequestStatus === "pending";
                   const hasPendingReturn =
                     normalizedReturnStatus === "pending_approval";
                   const hasApprovedReturn =
@@ -321,7 +408,14 @@ export function ToolsTable({
                     statusColors[normalizedStatus] ||
                     "bg-muted text-muted-foreground";
 
-                  if (
+                  if (hasPendingRequest) {
+                    badgeLabel =
+                      requestStatusLabels[normalizedRequestStatus!] ||
+                      badgeLabel;
+                    badgeClass =
+                      requestStatusColors[normalizedRequestStatus!] ||
+                      badgeClass;
+                  } else if (
                     hasPendingReturn ||
                     hasApprovedReturn ||
                     hasRejectedReturn
@@ -350,6 +444,15 @@ export function ToolsTable({
                             {tool.notes || "-"}
                           </p>
 
+                          {tool.request_date && hasPendingRequest && (
+                            <p className="text-xs text-amber-700">
+                              Solicitud:{" "}
+                              {new Date(tool.request_date).toLocaleDateString(
+                                "es-DO",
+                              )}
+                            </p>
+                          )}
+
                           {tool.return_requested_at && hasPendingReturn && (
                             <p className="text-xs text-amber-700">
                               Solicitud:{" "}
@@ -358,6 +461,13 @@ export function ToolsTable({
                               ).toLocaleDateString("es-DO")}
                             </p>
                           )}
+
+                          {tool.rejection_reason &&
+                            normalizedRequestStatus === "rejected" && (
+                              <p className="text-xs text-red-600 truncate">
+                                Motivo: {tool.rejection_reason}
+                              </p>
+                            )}
                         </div>
                       </TableCell>
 
@@ -366,13 +476,25 @@ export function ToolsTable({
                           {badgeLabel}
                         </Badge>
 
-                        {tool.assigned_to_name && (
+                        {hasPendingRequest && tool.requested_by_name && (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {tool.requested_by_name}
+                          </p>
+                        )}
+
+                        {hasPendingRequest && tool.request_order_id && (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Orden #{tool.request_order_id}
+                          </p>
+                        )}
+
+                        {!hasPendingRequest && tool.assigned_to_name && (
                           <p className="mt-1 text-xs text-muted-foreground">
                             {tool.assigned_to_name}
                           </p>
                         )}
 
-                        {tool.order_id && (
+                        {!hasPendingRequest && tool.order_id && (
                           <p className="mt-1 text-xs text-muted-foreground">
                             Orden #{tool.order_id}
                           </p>
@@ -393,13 +515,48 @@ export function ToolsTable({
                           </DropdownMenuTrigger>
 
                           <DropdownMenuContent align="end">
-                            {tool.order_id && (
+                            {hasPendingRequest && tool.request_order_id && (
+                              <DropdownMenuItem asChild>
+                                <Link
+                                  href={`/ordenes/${tool.request_order_id}`}
+                                >
+                                  <Eye className="mr-2 size-4" />
+                                  Ver orden
+                                </Link>
+                              </DropdownMenuItem>
+                            )}
+
+                            {!hasPendingRequest && tool.order_id && (
                               <DropdownMenuItem asChild>
                                 <Link href={`/ordenes/${tool.order_id}`}>
                                   <Eye className="mr-2 size-4" />
                                   Ver orden
                                 </Link>
                               </DropdownMenuItem>
+                            )}
+
+                            {hasPendingRequest && tool.request_id && (
+                              <>
+                                <DropdownMenuItem
+                                  onClick={() => handleApproveRequest(tool)}
+                                  disabled={isProcessingRequest === tool.id}
+                                >
+                                  <CheckCircle2 className="mr-2 size-4" />
+                                  {isProcessingRequest === tool.id
+                                    ? "Aprobando..."
+                                    : "Aprobar solicitud"}
+                                </DropdownMenuItem>
+
+                                <DropdownMenuItem
+                                  onClick={() => handleRejectRequest(tool)}
+                                  disabled={isProcessingRequest === tool.id}
+                                >
+                                  <XCircle className="mr-2 size-4" />
+                                  {isProcessingRequest === tool.id
+                                    ? "Procesando..."
+                                    : "Rechazar solicitud"}
+                                </DropdownMenuItem>
+                              </>
                             )}
 
                             {hasPendingReturn && tool.order_tool_id && (

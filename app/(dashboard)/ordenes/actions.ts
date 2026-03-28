@@ -260,8 +260,8 @@ export async function deleteOrderAction(formData: FormData) {
   return { success: true };
 }
 
-export async function assignToolToOrderAction(formData: FormData) {
-  await requireAuth();
+export async function requestToolForOrderAction(formData: FormData) {
+  const user = await requireAuth();
 
   const orderId = formData.get("order_id") as string;
   const toolId = formData.get("tool_id") as string;
@@ -273,66 +273,90 @@ export async function assignToolToOrderAction(formData: FormData) {
   const parsedOrderId = parseInt(orderId);
   const parsedToolId = parseInt(toolId);
 
+  if (Number.isNaN(parsedOrderId) || Number.isNaN(parsedToolId)) {
+    return { error: "Datos inválidos" };
+  }
+
+  const order = await sql`
+    SELECT assigned_to
+    FROM service_orders
+    WHERE id = ${parsedOrderId}
+  `;
+
+  if (order.length === 0) {
+    return { error: "Orden no encontrada" };
+  }
+
+  if (user.role !== "admin" && order[0].assigned_to !== user.id) {
+    return {
+      error: "No tiene permiso para solicitar herramientas en esta orden",
+    };
+  }
+
   const tool = await sql`
-    SELECT status
+    SELECT id, status
     FROM tools
     WHERE id = ${parsedToolId}
   `;
 
-  if (tool.length === 0 || tool[0].status !== "available") {
+  if (tool.length === 0) {
+    return { error: "Herramienta no encontrada" };
+  }
+
+  if (tool[0].status !== "available") {
     return { error: "La herramienta no está disponible" };
   }
 
-  // Verifica si ya existe una asignación de esta herramienta a esta orden
-  const existingAssignment = await sql`
-    SELECT id, returned_at
-    FROM order_tools
+  const existingPendingRequest = await sql`
+    SELECT id
+    FROM tool_requests
     WHERE order_id = ${parsedOrderId}
       AND tool_id = ${parsedToolId}
+      AND status = 'pending'
     LIMIT 1
   `;
 
-  if (existingAssignment.length > 0) {
-    const assignment = existingAssignment[0];
+  if (existingPendingRequest.length > 0) {
+    return { error: "Ya existe una solicitud pendiente para esta herramienta" };
+  }
 
-    // Si existe y NO ha sido devuelta, ya está asignada
-    if (!assignment.returned_at) {
-      return { error: "Esta herramienta ya está asignada a esta orden" };
-    }
+  const existingActiveAssignment = await sql`
+    SELECT id
+    FROM order_tools
+    WHERE order_id = ${parsedOrderId}
+      AND tool_id = ${parsedToolId}
+      AND returned_at IS NULL
+    LIMIT 1
+  `;
 
-    // Si existe pero ya fue devuelta, se reutiliza el registro
-    await sql`
-      UPDATE order_tools
-      SET
-        created_at = NOW(),
-        returned_at = NULL,
-        return_status = 'not_requested',
-        return_requested_at = NULL,
-        return_requested_by = NULL,
-        return_approved_at = NULL,
-        return_approved_by = NULL,
-        return_rejected_at = NULL,
-        return_rejected_by = NULL
-      WHERE id = ${assignment.id}
-    `;
-  } else {
-    // Si nunca ha existido, insertar normal
-    await sql`
-      INSERT INTO order_tools (order_id, tool_id)
-      VALUES (${parsedOrderId}, ${parsedToolId})
-    `;
+  if (existingActiveAssignment.length > 0) {
+    return { error: "Esta herramienta ya está asignada a esta orden" };
   }
 
   await sql`
-    UPDATE tools
-    SET status = 'in_use'
-    WHERE id = ${parsedToolId}
+    INSERT INTO tool_requests (
+      order_id,
+      tool_id,
+      requested_by,
+      status
+    )
+    VALUES (
+      ${parsedOrderId},
+      ${parsedToolId},
+      ${user.id},
+      'pending'
+    )
   `;
 
   revalidatePath("/ordenes");
   revalidatePath(`/ordenes/${parsedOrderId}`);
+  revalidatePath("/dashboard");
 
   return { success: true };
+}
+
+export async function assignToolToOrderAction(formData: FormData) {
+  return requestToolForOrderAction(formData);
 }
 
 export async function requestToolReturnAction(formData: FormData) {
@@ -591,6 +615,160 @@ export async function returnToolAction(formData: FormData) {
   revalidatePath("/ordenes");
   revalidatePath(`/ordenes/${assignment.order_id}`);
   revalidatePath("/dashboard");
+
+  return { success: true };
+}
+
+export async function approveToolRequestAction(formData: FormData) {
+  const user = await requireAdmin();
+
+  const requestId = formData.get("tool_request_id") as string;
+
+  if (!requestId) {
+    return { error: "Datos inválidos" };
+  }
+
+  const parsedRequestId = parseInt(requestId);
+
+  if (Number.isNaN(parsedRequestId)) {
+    return { error: "Datos inválidos" };
+  }
+
+  const request = await sql`
+    SELECT
+      tr.id,
+      tr.order_id,
+      tr.tool_id,
+      tr.status,
+      t.status AS tool_status
+    FROM tool_requests tr
+    JOIN tools t ON t.id = tr.tool_id
+    WHERE tr.id = ${parsedRequestId}
+    LIMIT 1
+  `;
+
+  if (request.length === 0) {
+    return { error: "Solicitud no encontrada" };
+  }
+
+  const currentRequest = request[0];
+
+  if (currentRequest.status !== "pending") {
+    return { error: "La solicitud ya fue procesada" };
+  }
+
+  if (currentRequest.tool_status !== "available") {
+    return { error: "La herramienta ya no está disponible" };
+  }
+
+  const existingActiveAssignment = await sql`
+    SELECT id
+    FROM order_tools
+    WHERE order_id = ${currentRequest.order_id}
+      AND tool_id = ${currentRequest.tool_id}
+      AND returned_at IS NULL
+    LIMIT 1
+  `;
+
+  if (existingActiveAssignment.length > 0) {
+    return { error: "La herramienta ya está asignada a esta orden" };
+  }
+
+  await sql`
+    UPDATE tool_requests
+    SET
+      status = 'approved',
+      reviewed_by = ${user.id},
+      reviewed_at = NOW(),
+      rejection_reason = NULL
+    WHERE id = ${parsedRequestId}
+  `;
+
+  await sql`
+    INSERT INTO order_tools (order_id, tool_id)
+    VALUES (${currentRequest.order_id}, ${currentRequest.tool_id})
+  `;
+
+  await sql`
+    UPDATE tools
+    SET
+      status = 'in_use',
+      updated_at = NOW()
+    WHERE id = ${currentRequest.tool_id}
+  `;
+
+  await sql`
+    UPDATE tool_requests
+    SET
+      status = 'rejected',
+      rejection_reason = 'La herramienta fue asignada a otra orden',
+      reviewed_by = ${user.id},
+      reviewed_at = NOW()
+    WHERE tool_id = ${currentRequest.tool_id}
+      AND status = 'pending'
+      AND id <> ${parsedRequestId}
+  `;
+
+  revalidatePath("/ordenes");
+  revalidatePath(`/ordenes/${currentRequest.order_id}`);
+  revalidatePath("/dashboard");
+  revalidatePath("/herramientas");
+
+  return { success: true };
+}
+
+export async function rejectToolRequestAction(formData: FormData) {
+  const user = await requireAdmin();
+
+  const requestId = formData.get("tool_request_id") as string;
+  const rejectionReason =
+    (formData.get("rejection_reason") as string)?.trim() || null;
+
+  if (!requestId) {
+    return { error: "Datos inválidos" };
+  }
+
+  const parsedRequestId = parseInt(requestId);
+
+  if (Number.isNaN(parsedRequestId)) {
+    return { error: "Datos inválidos" };
+  }
+
+  const request = await sql`
+    SELECT
+      id,
+      order_id,
+      tool_id,
+      status
+    FROM tool_requests
+    WHERE id = ${parsedRequestId}
+    LIMIT 1
+  `;
+
+  if (request.length === 0) {
+    return { error: "Solicitud no encontrada" };
+  }
+
+  const currentRequest = request[0];
+
+  if (currentRequest.status !== "pending") {
+    return { error: "La solicitud ya fue procesada" };
+  }
+
+  await sql`
+    UPDATE tool_requests
+    SET
+      status = 'rejected',
+      rejection_reason = ${rejectionReason},
+      reviewed_by = ${user.id},
+      reviewed_at = NOW()
+    WHERE id = ${parsedRequestId}
+  `;
+
+  revalidatePath("/ordenes");
+  revalidatePath(`/ordenes/${currentRequest.order_id}`);
+  revalidatePath("/dashboard");
+  revalidatePath("/herramientas");
 
   return { success: true };
 }

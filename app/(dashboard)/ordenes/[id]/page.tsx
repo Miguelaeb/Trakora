@@ -3,13 +3,7 @@ import { sql } from "@/lib/db";
 import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -19,7 +13,6 @@ import {
   MapPin,
   Calendar,
   User,
-  Clock,
   Printer,
 } from "lucide-react";
 import { OrderToolsSection } from "./order-tools-section";
@@ -64,8 +57,8 @@ async function getOrder(id: number) {
     SELECT 
       so.*,
       u.full_name as technician_name,
-u.email as technician_email,
-creator.full_name as created_by_name
+      u.email as technician_email,
+      creator.full_name as created_by_name
     FROM service_orders so
     LEFT JOIN users u ON so.assigned_to = u.id
     LEFT JOIN users creator ON so.created_by = creator.id
@@ -94,6 +87,28 @@ async function getOrderTools(orderId: number) {
     JOIN tools t ON ot.tool_id = t.id
     WHERE ot.order_id = ${orderId}
     ORDER BY ot.created_at DESC
+  `;
+}
+
+async function getToolRequests(orderId: number) {
+  return sql`
+    SELECT
+      tr.id,
+      tr.order_id,
+      tr.tool_id,
+      t.name AS tool_name,
+      tr.requested_by,
+      u.full_name AS requested_by_name,
+      tr.status,
+      tr.rejection_reason,
+      tr.reviewed_by,
+      tr.reviewed_at,
+      tr.created_at
+    FROM tool_requests tr
+    JOIN tools t ON t.id = tr.tool_id
+    JOIN users u ON u.id = tr.requested_by
+    WHERE tr.order_id = ${orderId}
+    ORDER BY tr.created_at DESC
   `;
 }
 
@@ -153,13 +168,19 @@ export default async function OrderDetailPage({ params }: PageProps) {
     redirect("/ordenes");
   }
 
-  const [orderTools, orderMaterials, availableTools, availableMaterials] =
-    await Promise.all([
-      getOrderTools(orderId),
-      getOrderMaterials(orderId),
-      getAvailableTools(),
-      getAvailableMaterials(),
-    ]);
+  const [
+    orderTools,
+    orderMaterials,
+    availableTools,
+    availableMaterials,
+    toolRequests,
+  ] = await Promise.all([
+    getOrderTools(orderId),
+    getOrderMaterials(orderId),
+    getAvailableTools(),
+    getAvailableMaterials(),
+    getToolRequests(orderId),
+  ]);
 
   return (
     <div className="space-y-6">
@@ -204,14 +225,13 @@ export default async function OrderDetailPage({ params }: PageProps) {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
-        {/* Main Info */}
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle>Información del Servicio</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div>
-              <h4 className="text-sm font-medium text-muted-foreground mb-1">
+              <h4 className="mb-1 text-sm font-medium text-muted-foreground">
                 Descripción
               </h4>
               <p className="whitespace-pre-wrap">{order.description}</p>
@@ -219,7 +239,7 @@ export default async function OrderDetailPage({ params }: PageProps) {
 
             {order.notes && (
               <div>
-                <h4 className="text-sm font-medium text-muted-foreground mb-1">
+                <h4 className="mb-1 text-sm font-medium text-muted-foreground">
                   Notas
                 </h4>
                 <p className="whitespace-pre-wrap">{order.notes}</p>
@@ -260,7 +280,6 @@ export default async function OrderDetailPage({ params }: PageProps) {
           </CardContent>
         </Card>
 
-        {/* Sidebar Info */}
         <Card>
           <CardHeader>
             <CardTitle>Detalles</CardTitle>
@@ -316,12 +335,13 @@ export default async function OrderDetailPage({ params }: PageProps) {
         </Card>
       </div>
 
-      {/* Tools Section */}
       <OrderToolsSection
         orderId={orderId}
         orderTools={orderTools}
         availableTools={availableTools}
+        toolRequests={toolRequests}
         canEdit={!["completed", "cancelled"].includes(order.status)}
+        isAdmin={isAdmin}
       />
 
       <OrderMaterialsSection
