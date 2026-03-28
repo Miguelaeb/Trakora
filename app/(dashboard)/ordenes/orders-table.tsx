@@ -27,7 +27,17 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Eye, Edit, MoreHorizontal, Search, Trash2 } from "lucide-react";
+import {
+  Eye,
+  Edit,
+  MoreHorizontal,
+  Search,
+  Trash2,
+  AlertTriangle,
+  Wrench,
+  Package,
+  RotateCcw,
+} from "lucide-react";
 import { deleteOrderAction, updateOrderStatusAction } from "./actions";
 import {
   AlertDialog,
@@ -52,6 +62,9 @@ interface Order {
   scheduled_date: string | null;
   created_at: string;
   technician_name: string | null;
+  pending_tool_requests?: number | string;
+  pending_material_requests?: number | string;
+  pending_tool_returns?: number | string;
 }
 
 interface OrdersTableProps {
@@ -152,6 +165,7 @@ export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
                   <SelectItem value="cancelled">Cancelada</SelectItem>
                 </SelectContent>
               </Select>
+
               <Select value={priorityFilter} onValueChange={setPriorityFilter}>
                 <SelectTrigger className="w-36">
                   <SelectValue placeholder="Prioridad" />
@@ -182,127 +196,205 @@ export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
                 <TableHead>Estado</TableHead>
                 <TableHead>Prioridad</TableHead>
                 <TableHead className="hidden lg:table-cell">Técnico</TableHead>
+                <TableHead>Pendientes</TableHead>
                 <TableHead className="w-12"></TableHead>
               </TableRow>
             </TableHeader>
+
             <TableBody>
               {filteredOrders.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={7}
+                    colSpan={8}
                     className="h-24 text-center text-muted-foreground"
                   >
                     No se encontraron órdenes
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredOrders.map((order) => (
-                  <TableRow key={order.id}>
-                    <TableCell>
-                      <Link
-                        href={`/ordenes/${order.id}`}
-                        className="font-medium text-primary hover:underline"
-                      >
-                        {order.order_number}
-                      </Link>
-                    </TableCell>
-                    <TableCell>
-                      <div>
-                        <p className="font-medium">{order.client_name}</p>
-                        {order.client_phone && (
-                          <p className="text-xs text-muted-foreground">
-                            {order.client_phone}
-                          </p>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell className="hidden md:table-cell max-w-xs">
-                      <p className="truncate">{order.description}</p>
-                    </TableCell>
-                    <TableCell>
-                      <Select
-                        value={order.status}
-                        onValueChange={(value) =>
-                          handleStatusChange(order.id, value)
-                        }
-                        disabled={
-                          !isAdmin &&
-                          ["completed", "cancelled"].includes(order.status)
+                filteredOrders.map((order) => {
+                  const pendingTools = Number(order.pending_tool_requests || 0);
+                  const pendingMaterials = Number(
+                    order.pending_material_requests || 0,
+                  );
+                  const pendingReturns = Number(
+                    order.pending_tool_returns || 0,
+                  );
+
+                  const totalPending =
+                    pendingTools + pendingMaterials + pendingReturns;
+                  const hasPending = totalPending > 0;
+
+                  return (
+                    <TableRow
+                      key={order.id}
+                      className={hasPending ? "bg-amber-50/40" : ""}
+                    >
+                      <TableCell
+                        className={
+                          hasPending ? "border-l-4 border-l-amber-400" : ""
                         }
                       >
-                        <SelectTrigger className="h-7 w-32 text-xs">
-                          <Badge
-                            className={`${statusColors[order.status]} border-0`}
-                          >
-                            {statusLabels[order.status]}
-                          </Badge>
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="pending">Pendiente</SelectItem>
-                          <SelectItem value="assigned">Asignada</SelectItem>
-                          <SelectItem value="in_progress">
-                            En Progreso
-                          </SelectItem>
-                          <SelectItem value="completed">Completada</SelectItem>
-                          <SelectItem value="cancelled">Cancelada</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        className={`${priorityColors[order.priority]} border-0`}
-                      >
-                        {priorityLabels[order.priority]}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="hidden lg:table-cell">
-                      {order.technician_name || (
-                        <span className="text-muted-foreground">
-                          Sin asignar
-                        </span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="size-8"
-                          >
-                            <MoreHorizontal className="size-4" />
-                            <span className="sr-only">Acciones</span>
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem asChild>
-                            <Link href={`/ordenes/${order.id}`}>
-                              <Eye className="mr-2 size-4" />
-                              Ver Detalles
-                            </Link>
-                          </DropdownMenuItem>
-                          {isAdmin && (
-                            <>
-                              <DropdownMenuItem asChild>
-                                <Link href={`/ordenes/${order.id}/editar`}>
-                                  <Edit className="mr-2 size-4" />
-                                  Editar
-                                </Link>
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                className="text-destructive focus:text-destructive"
-                                onClick={() => setDeleteId(order.id)}
-                              >
-                                <Trash2 className="mr-2 size-4" />
-                                Eliminar
-                              </DropdownMenuItem>
-                            </>
+                        <Link
+                          href={`/ordenes/${order.id}`}
+                          className="font-medium text-primary hover:underline"
+                        >
+                          {order.order_number}
+                        </Link>
+                      </TableCell>
+
+                      <TableCell>
+                        <div>
+                          <p className="font-medium">{order.client_name}</p>
+                          {order.client_phone && (
+                            <p className="text-xs text-muted-foreground">
+                              {order.client_phone}
+                            </p>
                           )}
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
-                  </TableRow>
-                ))
+                        </div>
+                      </TableCell>
+
+                      <TableCell className="hidden max-w-xs md:table-cell">
+                        <p className="truncate">{order.description}</p>
+                      </TableCell>
+
+                      <TableCell>
+                        <Select
+                          value={order.status}
+                          onValueChange={(value) =>
+                            handleStatusChange(order.id, value)
+                          }
+                          disabled={
+                            !isAdmin &&
+                            ["completed", "cancelled"].includes(order.status)
+                          }
+                        >
+                          <SelectTrigger className="h-7 w-32 text-xs">
+                            <Badge
+                              className={`${statusColors[order.status]} border-0`}
+                            >
+                              {statusLabels[order.status]}
+                            </Badge>
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="pending">Pendiente</SelectItem>
+                            <SelectItem value="assigned">Asignada</SelectItem>
+                            <SelectItem value="in_progress">
+                              En Progreso
+                            </SelectItem>
+                            <SelectItem value="completed">
+                              Completada
+                            </SelectItem>
+                            <SelectItem value="cancelled">Cancelada</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
+
+                      <TableCell>
+                        <Badge
+                          className={`${priorityColors[order.priority]} border-0`}
+                        >
+                          {priorityLabels[order.priority]}
+                        </Badge>
+                      </TableCell>
+
+                      <TableCell className="hidden lg:table-cell">
+                        {order.technician_name || (
+                          <span className="text-muted-foreground">
+                            Sin asignar
+                          </span>
+                        )}
+                      </TableCell>
+
+                      <TableCell>
+                        {hasPending ? (
+                          <div className="flex flex-wrap gap-2">
+                            {pendingMaterials > 0 && (
+                              <Badge className="bg-amber-100 text-amber-800 border-0">
+                                <Package className="mr-1 size-3" />
+                                {pendingMaterials} material
+                                {pendingMaterials > 1 ? "es" : ""}
+                              </Badge>
+                            )}
+
+                            {pendingTools > 0 && (
+                              <Badge className="bg-sky-100 text-sky-800 border-0">
+                                <Wrench className="mr-1 size-3" />
+                                {pendingTools} herramienta
+                                {pendingTools > 1 ? "s" : ""}
+                              </Badge>
+                            )}
+
+                            {pendingReturns > 0 && (
+                              <Badge className="bg-orange-100 text-orange-800 border-0">
+                                <RotateCcw className="mr-1 size-3" />
+                                {pendingReturns} devolución
+                                {pendingReturns > 1 ? "es" : ""}
+                              </Badge>
+                            )}
+
+                            {isAdmin && (
+                              <Link
+                                href={`/ordenes/${order.id}`}
+                                className="flex items-center gap-1 text-xs font-medium text-amber-700 hover:underline"
+                              >
+                                <AlertTriangle className="size-3.5" />
+                                Revisar
+                              </Link>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-sm text-muted-foreground">
+                            Sin pendientes
+                          </span>
+                        )}
+                      </TableCell>
+
+                      <TableCell>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-8"
+                            >
+                              <MoreHorizontal className="size-4" />
+                              <span className="sr-only">Acciones</span>
+                            </Button>
+                          </DropdownMenuTrigger>
+
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem asChild>
+                              <Link href={`/ordenes/${order.id}`}>
+                                <Eye className="mr-2 size-4" />
+                                Ver Detalles
+                              </Link>
+                            </DropdownMenuItem>
+
+                            {isAdmin && (
+                              <>
+                                <DropdownMenuItem asChild>
+                                  <Link href={`/ordenes/${order.id}/editar`}>
+                                    <Edit className="mr-2 size-4" />
+                                    Editar
+                                  </Link>
+                                </DropdownMenuItem>
+
+                                <DropdownMenuItem
+                                  className="text-destructive focus:text-destructive"
+                                  onClick={() => setDeleteId(order.id)}
+                                >
+                                  <Trash2 className="mr-2 size-4" />
+                                  Eliminar
+                                </DropdownMenuItem>
+                              </>
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
               )}
             </TableBody>
           </Table>

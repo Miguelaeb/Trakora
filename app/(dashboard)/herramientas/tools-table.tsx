@@ -45,17 +45,9 @@ import {
   Search,
   Trash2,
   AlertCircle,
-  CheckCircle2,
-  XCircle,
   Eye,
 } from "lucide-react";
 import { deleteToolAction } from "./actions";
-import {
-  approveToolReturnAction,
-  rejectToolReturnAction,
-  approveToolRequestAction,
-  rejectToolRequestAction,
-} from "../ordenes/actions";
 
 interface Tool {
   id: number;
@@ -99,31 +91,6 @@ const statusColors: Record<string, string> = {
   lost: "bg-red-100 text-red-800",
 };
 
-const returnStatusLabels: Record<string, string> = {
-  not_requested: "",
-  pending_approval: "Pendiente devolución",
-  approved: "Devuelta",
-  rejected: "Devolución rechazada",
-};
-
-const returnStatusColors: Record<string, string> = {
-  pending_approval: "bg-amber-100 text-amber-800",
-  approved: "bg-gray-100 text-gray-700",
-  rejected: "bg-red-100 text-red-800",
-};
-
-const requestStatusLabels: Record<string, string> = {
-  pending: "Solicitud pendiente",
-  approved: "Solicitud aprobada",
-  rejected: "Solicitud rechazada",
-};
-
-const requestStatusColors: Record<string, string> = {
-  pending: "bg-amber-100 text-amber-800",
-  approved: "bg-green-100 text-green-800",
-  rejected: "bg-red-100 text-red-800",
-};
-
 export function ToolsTable({
   tools,
   initialSearch,
@@ -142,12 +109,6 @@ export function ToolsTable({
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [isProcessingReturn, setIsProcessingReturn] = useState<number | null>(
-    null,
-  );
-  const [isProcessingRequest, setIsProcessingRequest] = useState<number | null>(
-    null,
-  );
 
   const selectedTool = useMemo(
     () => tools.find((tool) => tool.id === deleteId) ?? null,
@@ -195,106 +156,6 @@ export function ToolsTable({
     } finally {
       setIsDeleting(false);
       setDeleteId(null);
-    }
-  };
-
-  const handleApproveReturn = async (tool: Tool) => {
-    if (!tool.order_tool_id) return;
-
-    try {
-      setIsProcessingReturn(tool.id);
-      setError(null);
-
-      const formData = new FormData();
-      formData.set("order_tool_id", tool.order_tool_id.toString());
-
-      const result = await approveToolReturnAction(formData);
-
-      if (result?.error) {
-        setError(result.error);
-        return;
-      }
-
-      window.location.reload();
-    } catch {
-      setError("Ocurrió un error al aprobar la devolución.");
-    } finally {
-      setIsProcessingReturn(null);
-    }
-  };
-
-  const handleRejectReturn = async (tool: Tool) => {
-    if (!tool.order_tool_id) return;
-
-    try {
-      setIsProcessingReturn(tool.id);
-      setError(null);
-
-      const formData = new FormData();
-      formData.set("order_tool_id", tool.order_tool_id.toString());
-
-      const result = await rejectToolReturnAction(formData);
-
-      if (result?.error) {
-        setError(result.error);
-        return;
-      }
-
-      window.location.reload();
-    } catch {
-      setError("Ocurrió un error al rechazar la devolución.");
-    } finally {
-      setIsProcessingReturn(null);
-    }
-  };
-
-  const handleApproveRequest = async (tool: Tool) => {
-    if (!tool.request_id) return;
-
-    try {
-      setIsProcessingRequest(tool.id);
-      setError(null);
-
-      const formData = new FormData();
-      formData.set("tool_request_id", tool.request_id.toString());
-
-      const result = await approveToolRequestAction(formData);
-
-      if (result?.error) {
-        setError(result.error);
-        return;
-      }
-
-      window.location.reload();
-    } catch {
-      setError("Ocurrió un error al aprobar la solicitud.");
-    } finally {
-      setIsProcessingRequest(null);
-    }
-  };
-
-  const handleRejectRequest = async (tool: Tool) => {
-    if (!tool.request_id) return;
-
-    try {
-      setIsProcessingRequest(tool.id);
-      setError(null);
-
-      const formData = new FormData();
-      formData.set("tool_request_id", tool.request_id.toString());
-
-      const result = await rejectToolRequestAction(formData);
-
-      if (result?.error) {
-        setError(result.error);
-        return;
-      }
-
-      window.location.reload();
-    } catch {
-      setError("Ocurrió un error al rechazar la solicitud.");
-    } finally {
-      setIsProcessingRequest(null);
     }
   };
 
@@ -388,43 +249,11 @@ export function ToolsTable({
               ) : (
                 tools.map((tool) => {
                   const normalizedStatus = tool.status?.toLowerCase().trim();
-                  const normalizedReturnStatus =
-                    tool.return_status?.toLowerCase().trim() || null;
-                  const normalizedRequestStatus =
-                    tool.request_status?.toLowerCase().trim() || null;
-
-                  const hasPendingRequest =
-                    normalizedRequestStatus === "pending";
-                  const hasPendingReturn =
-                    normalizedReturnStatus === "pending_approval";
-                  const hasApprovedReturn =
-                    normalizedReturnStatus === "approved";
-                  const hasRejectedReturn =
-                    normalizedReturnStatus === "rejected";
-
-                  let badgeLabel =
+                  const badgeLabel =
                     statusLabels[normalizedStatus] || tool.status || "-";
-                  let badgeClass =
+                  const badgeClass =
                     statusColors[normalizedStatus] ||
                     "bg-muted text-muted-foreground";
-
-                  if (hasPendingRequest) {
-                    badgeLabel =
-                      requestStatusLabels[normalizedRequestStatus!] ||
-                      badgeLabel;
-                    badgeClass =
-                      requestStatusColors[normalizedRequestStatus!] ||
-                      badgeClass;
-                  } else if (
-                    hasPendingReturn ||
-                    hasApprovedReturn ||
-                    hasRejectedReturn
-                  ) {
-                    badgeLabel =
-                      returnStatusLabels[normalizedReturnStatus!] || badgeLabel;
-                    badgeClass =
-                      returnStatusColors[normalizedReturnStatus!] || badgeClass;
-                  }
 
                   return (
                     <TableRow key={tool.id}>
@@ -439,36 +268,9 @@ export function ToolsTable({
                       </TableCell>
 
                       <TableCell className="hidden lg:table-cell max-w-xs">
-                        <div className="space-y-1">
-                          <p className="truncate text-muted-foreground">
-                            {tool.notes || "-"}
-                          </p>
-
-                          {tool.request_date && hasPendingRequest && (
-                            <p className="text-xs text-amber-700">
-                              Solicitud:{" "}
-                              {new Date(tool.request_date).toLocaleDateString(
-                                "es-DO",
-                              )}
-                            </p>
-                          )}
-
-                          {tool.return_requested_at && hasPendingReturn && (
-                            <p className="text-xs text-amber-700">
-                              Solicitud:{" "}
-                              {new Date(
-                                tool.return_requested_at,
-                              ).toLocaleDateString("es-DO")}
-                            </p>
-                          )}
-
-                          {tool.rejection_reason &&
-                            normalizedRequestStatus === "rejected" && (
-                              <p className="text-xs text-red-600 truncate">
-                                Motivo: {tool.rejection_reason}
-                              </p>
-                            )}
-                        </div>
+                        <p className="truncate text-muted-foreground">
+                          {tool.notes || "-"}
+                        </p>
                       </TableCell>
 
                       <TableCell>
@@ -476,25 +278,13 @@ export function ToolsTable({
                           {badgeLabel}
                         </Badge>
 
-                        {hasPendingRequest && tool.requested_by_name && (
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {tool.requested_by_name}
-                          </p>
-                        )}
-
-                        {hasPendingRequest && tool.request_order_id && (
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            Orden #{tool.request_order_id}
-                          </p>
-                        )}
-
-                        {!hasPendingRequest && tool.assigned_to_name && (
+                        {tool.assigned_to_name && (
                           <p className="mt-1 text-xs text-muted-foreground">
                             {tool.assigned_to_name}
                           </p>
                         )}
 
-                        {!hasPendingRequest && tool.order_id && (
+                        {tool.order_id && (
                           <p className="mt-1 text-xs text-muted-foreground">
                             Orden #{tool.order_id}
                           </p>
@@ -515,72 +305,13 @@ export function ToolsTable({
                           </DropdownMenuTrigger>
 
                           <DropdownMenuContent align="end">
-                            {hasPendingRequest && tool.request_order_id && (
-                              <DropdownMenuItem asChild>
-                                <Link
-                                  href={`/ordenes/${tool.request_order_id}`}
-                                >
-                                  <Eye className="mr-2 size-4" />
-                                  Ver orden
-                                </Link>
-                              </DropdownMenuItem>
-                            )}
-
-                            {!hasPendingRequest && tool.order_id && (
+                            {tool.order_id && (
                               <DropdownMenuItem asChild>
                                 <Link href={`/ordenes/${tool.order_id}`}>
                                   <Eye className="mr-2 size-4" />
                                   Ver orden
                                 </Link>
                               </DropdownMenuItem>
-                            )}
-
-                            {hasPendingRequest && tool.request_id && (
-                              <>
-                                <DropdownMenuItem
-                                  onClick={() => handleApproveRequest(tool)}
-                                  disabled={isProcessingRequest === tool.id}
-                                >
-                                  <CheckCircle2 className="mr-2 size-4" />
-                                  {isProcessingRequest === tool.id
-                                    ? "Aprobando..."
-                                    : "Aprobar solicitud"}
-                                </DropdownMenuItem>
-
-                                <DropdownMenuItem
-                                  onClick={() => handleRejectRequest(tool)}
-                                  disabled={isProcessingRequest === tool.id}
-                                >
-                                  <XCircle className="mr-2 size-4" />
-                                  {isProcessingRequest === tool.id
-                                    ? "Procesando..."
-                                    : "Rechazar solicitud"}
-                                </DropdownMenuItem>
-                              </>
-                            )}
-
-                            {hasPendingReturn && tool.order_tool_id && (
-                              <>
-                                <DropdownMenuItem
-                                  onClick={() => handleApproveReturn(tool)}
-                                  disabled={isProcessingReturn === tool.id}
-                                >
-                                  <CheckCircle2 className="mr-2 size-4" />
-                                  {isProcessingReturn === tool.id
-                                    ? "Aprobando..."
-                                    : "Aprobar devolución"}
-                                </DropdownMenuItem>
-
-                                <DropdownMenuItem
-                                  onClick={() => handleRejectReturn(tool)}
-                                  disabled={isProcessingReturn === tool.id}
-                                >
-                                  <XCircle className="mr-2 size-4" />
-                                  {isProcessingReturn === tool.id
-                                    ? "Procesando..."
-                                    : "Rechazar devolución"}
-                                </DropdownMenuItem>
-                              </>
                             )}
 
                             <DropdownMenuItem asChild>
