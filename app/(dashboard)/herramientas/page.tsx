@@ -12,6 +12,26 @@ export const metadata = {
 
 const allowedStatuses = ["todos", "available", "in_use", "maintenance", "lost"];
 
+interface Tool {
+  id: number;
+  name: string;
+  internal_code: string | null;
+  category: string | null;
+  notes: string | null;
+  status: string;
+  assigned_to_name: string | null;
+  order_tool_id: number | null;
+  order_id: number | null;
+  return_status: string | null;
+  return_requested_at: string | null;
+  request_id: number | null;
+  request_status: "pending" | "approved" | "rejected" | null;
+  request_date: string | null;
+  requested_by_name: string | null;
+  request_order_id: number | null;
+  rejection_reason: string | null;
+}
+
 interface PageProps {
   searchParams: Promise<{
     search?: string;
@@ -19,10 +39,10 @@ interface PageProps {
   }>;
 }
 
-async function getTools(search = "", status = "todos") {
+async function getTools(search = "", status = "todos"): Promise<Tool[]> {
   const searchPattern = `%${search}%`;
 
-  return sql`
+  const result = await sql`
     SELECT
       t.id,
       t.name,
@@ -30,20 +50,39 @@ async function getTools(search = "", status = "todos") {
       t.category,
       t.notes,
       t.status,
-      so.assigned_to,
+
       u.full_name AS assigned_to_name,
       ot.id AS order_tool_id,
       ot.order_id,
       ot.return_status,
-      ot.return_requested_at
+      ot.return_requested_at,
+
+      tr.id AS request_id,
+      tr.status AS request_status,
+      tr.created_at AS request_date,
+      tr.rejection_reason,
+      requester.full_name AS requested_by_name,
+      tr.order_id AS request_order_id
+
     FROM tools t
+
     LEFT JOIN order_tools ot
       ON ot.tool_id = t.id
       AND ot.returned_at IS NULL
+
     LEFT JOIN service_orders so
       ON so.id = ot.order_id
+
     LEFT JOIN users u
       ON u.id = so.assigned_to
+
+    LEFT JOIN tool_requests tr
+      ON tr.tool_id = t.id
+      AND tr.status = 'pending'
+
+    LEFT JOIN users requester
+      ON requester.id = tr.requested_by
+
     WHERE
       (
         ${search === ""}
@@ -55,8 +94,11 @@ async function getTools(search = "", status = "todos") {
       AND (
         ${status === "todos"} OR t.status = ${status}
       )
+
     ORDER BY t.name
   `;
+
+  return result as Tool[];
 }
 
 export default async function HerramientasPage({ searchParams }: PageProps) {
