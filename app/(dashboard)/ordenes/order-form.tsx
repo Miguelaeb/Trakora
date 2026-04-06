@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -43,12 +43,31 @@ export function OrderForm({ technicians, order }: OrderFormProps) {
   const action = order ? updateOrderAction : createOrderAction;
   const [state, formAction, isPending] = useActionState(action, null);
 
+  const technicianDefaultValue = useMemo(() => {
+    if (!order) return "unassigned";
+    if (order.status === "cancelled") return "unassigned";
+    if (!order.assigned_to) return "unassigned";
+    return order.assigned_to.toString();
+  }, [order]);
+
+  const statusDefaultValue = useMemo(() => {
+    if (!order) return "new";
+    if (order.status === "cancelled") return "cancelled";
+    if (
+      !order.assigned_to &&
+      ["assigned", "in_progress"].includes(order.status)
+    ) {
+      return "new";
+    }
+    return order.status;
+  }, [order]);
+
   return (
     <form action={formAction} className="space-y-6">
       {order && <input type="hidden" name="id" value={order.id} />}
 
       {state?.error && (
-        <div className="flex items-center gap-2 p-3 text-sm text-destructive bg-destructive/10 rounded-lg">
+        <div className="flex items-center gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
           <AlertCircle className="size-4 shrink-0" />
           <span>{state.error}</span>
         </div>
@@ -60,7 +79,7 @@ export function OrderForm({ technicians, order }: OrderFormProps) {
           <Input
             id="client_name"
             name="client_name"
-            defaultValue={order?.client_name}
+            defaultValue={order?.client_name ?? ""}
             placeholder="Juan Pérez"
             required
             disabled={isPending}
@@ -73,7 +92,7 @@ export function OrderForm({ technicians, order }: OrderFormProps) {
             id="client_phone"
             name="client_phone"
             type="tel"
-            defaultValue={order?.client_phone || ""}
+            defaultValue={order?.client_phone ?? ""}
             placeholder="809-555-1234"
             disabled={isPending}
           />
@@ -85,7 +104,7 @@ export function OrderForm({ technicians, order }: OrderFormProps) {
         <Input
           id="client_address"
           name="client_address"
-          defaultValue={order?.client_address || ""}
+          defaultValue={order?.client_address ?? ""}
           placeholder="Calle Principal #123, Santo Domingo"
           disabled={isPending}
         />
@@ -96,7 +115,7 @@ export function OrderForm({ technicians, order }: OrderFormProps) {
         <Textarea
           id="description"
           name="description"
-          defaultValue={order?.description}
+          defaultValue={order?.description ?? ""}
           placeholder="Describa el servicio requerido..."
           rows={4}
           required
@@ -129,17 +148,26 @@ export function OrderForm({ technicians, order }: OrderFormProps) {
             <Label htmlFor="status">Estado *</Label>
             <Select
               name="status"
-              defaultValue={order.status}
+              defaultValue={statusDefaultValue}
               disabled={isPending}
             >
               <SelectTrigger>
                 <SelectValue placeholder="Seleccionar estado" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="pending">Pendiente</SelectItem>
-                <SelectItem value="assigned">Asignada</SelectItem>
-                <SelectItem value="in_progress">En Progreso</SelectItem>
-                <SelectItem value="completed">Completada</SelectItem>
+                {!order.assigned_to || order.status === "cancelled" ? (
+                  <>
+                    <SelectItem value="new">Nueva</SelectItem>
+                    <SelectItem value="cancelled">Cancelada</SelectItem>
+                  </>
+                ) : (
+                  <>
+                    <SelectItem value="assigned">Asignada</SelectItem>
+                    <SelectItem value="in_progress">En proceso</SelectItem>
+                    <SelectItem value="completed">Completada</SelectItem>
+                    <SelectItem value="cancelled">Cancelada</SelectItem>
+                  </>
+                )}
               </SelectContent>
             </Select>
           </div>
@@ -148,8 +176,9 @@ export function OrderForm({ technicians, order }: OrderFormProps) {
         <div className="space-y-2">
           <Label htmlFor="assigned_to">Técnico Asignado</Label>
           <Select
+            key={`assigned-to-${order?.id ?? "new"}-${technicianDefaultValue}`}
             name="assigned_to"
-            defaultValue={order?.assigned_to?.toString() || "unassigned"}
+            defaultValue={technicianDefaultValue}
             disabled={isPending}
           >
             <SelectTrigger>
@@ -188,7 +217,7 @@ export function OrderForm({ technicians, order }: OrderFormProps) {
           <Textarea
             id="notes"
             name="notes"
-            defaultValue={order?.notes || ""}
+            defaultValue={order?.notes ?? ""}
             placeholder="Observaciones, notas del técnico, etc."
             rows={3}
             disabled={isPending}

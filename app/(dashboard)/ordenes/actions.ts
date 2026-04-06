@@ -38,6 +38,7 @@ export async function createOrderAction(_prevState: any, formData: FormData) {
       ? Number(assignedToRaw)
       : null;
 
+  const initialStatus = assignedTo ? "assigned" : "new";
   const orderNumber = generateOrderNumber();
 
   await sql`
@@ -67,7 +68,7 @@ export async function createOrderAction(_prevState: any, formData: FormData) {
       ${scheduledDate || new Date().toISOString().split("T")[0]},
       ${"Servicio general"},
       ${user.id},
-      ${assignedTo ? "assigned" : "pending"}
+      ${initialStatus}
     )
   `;
 
@@ -85,37 +86,67 @@ export async function updateOrderAction(_prevState: any, formData: FormData) {
   const clientAddress = formData.get("client_address") as string;
   const description = formData.get("description") as string;
   const priority = formData.get("priority") as string;
-  const status = formData.get("status") as string;
+  const submittedStatus = formData.get("status") as string;
   const assignedToRaw = formData.get("assigned_to") as string;
   const scheduledDate = formData.get("scheduled_date") as string;
   const notes = formData.get("notes") as string;
 
-  if (!id || !clientName || !description || !priority || !status) {
+  if (!id || !clientName || !description || !priority || !submittedStatus) {
     return { error: "Por favor complete los campos requeridos" };
   }
 
   const allowedStatuses = [
-    "pending",
+    "new",
     "assigned",
     "in_progress",
     "completed",
     "cancelled",
   ];
 
-  if (!allowedStatuses.includes(status)) {
+  if (!allowedStatuses.includes(submittedStatus)) {
     return { error: "Estado inválido" };
   }
 
-  const assignedTo =
+  let assignedTo =
     assignedToRaw &&
     assignedToRaw !== "unassigned" &&
     !Number.isNaN(Number(assignedToRaw))
       ? Number(assignedToRaw)
       : null;
 
-  const completedDate = ["completed", "cancelled"].includes(status)
-    ? new Date().toISOString()
-    : null;
+  const currentOrder = await sql`
+    SELECT status, assigned_to, completed_date
+    FROM service_orders
+    WHERE id = ${parseInt(id)}
+    LIMIT 1
+  `;
+
+  if (currentOrder.length === 0) {
+    return { error: "Orden no encontrada" };
+  }
+
+  let finalStatus = submittedStatus;
+
+  if (finalStatus === "cancelled") {
+    assignedTo = null;
+  }
+
+  if (!assignedTo && ["new", "assigned"].includes(finalStatus)) {
+    finalStatus = "new";
+  }
+
+  if (assignedTo && finalStatus === "new") {
+    finalStatus = "assigned";
+  }
+
+  if (!assignedTo && finalStatus === "in_progress") {
+    return {
+      error: "No puede poner una orden en proceso sin técnico asignado",
+    };
+  }
+
+  const completedDate =
+    finalStatus === "completed" ? new Date().toISOString() : null;
 
   await sql`
     UPDATE service_orders
@@ -125,7 +156,7 @@ export async function updateOrderAction(_prevState: any, formData: FormData) {
       client_address = ${clientAddress || null},
       description = ${description},
       priority = ${priority},
-      status = ${status},
+      status = ${finalStatus},
       assigned_to = ${assignedTo},
       scheduled_date = ${scheduledDate || null},
       service_date = ${scheduledDate || new Date().toISOString().split("T")[0]},
@@ -168,11 +199,79 @@ export async function cancelOrderAction(formData: FormData) {
 
   const id = Number(formData.get("id"));
 
+  const order = await sql`
+    SELECT id
+    FROM service_orders
+    WHERE id = ${id}
+    LIMIT 1
+  `;
+
+  if (order.length === 0) {
+    return { error: "Orden no encontrada" };
+  }
+
+  const activeTools = await sql`
+    SELECT tool_id
+    FROM order_tools
+    WHERE order_id = ${id}
+      AND returned_at IS NULL
+  `;
+
+  for (const tool of activeTools) {
+    await sql`
+      UPDATE tools
+      SET
+        status = 'available',
+        updated_at = NOW()
+      WHERE id = ${tool.tool_id}
+    `;
+  }
+
+  const usedMaterials = await sql`
+    SELECT material_id, quantity_used
+    FROM order_materials
+    WHERE order_id = ${id}
+  `;
+
+  for (const material of usedMaterials) {
+    await sql`
+      UPDATE materials
+      SET
+        quantity_in_stock = quantity_in_stock + ${material.quantity_used},
+        updated_at = NOW()
+      WHERE id = ${material.material_id}
+    `;
+  }
+
+  await sql`
+    DELETE FROM order_tools
+    WHERE order_id = ${id}
+      AND returned_at IS NULL
+  `;
+
+  await sql`
+    DELETE FROM order_materials
+    WHERE order_id = ${id}
+  `;
+
+  await sql`
+    DELETE FROM tool_requests
+    WHERE order_id = ${id}
+      AND status = 'pending'
+  `;
+
+  await sql`
+    DELETE FROM material_requests
+    WHERE order_id = ${id}
+      AND status = 'pending'
+  `;
+
   await sql`
     UPDATE service_orders
     SET 
       status = 'cancelled',
-      completed_date = NOW(),
+      assigned_to = NULL,
+      completed_date = NULL,
       updated_at = NOW()
     WHERE id = ${id}
   `;
@@ -180,6 +279,8 @@ export async function cancelOrderAction(formData: FormData) {
   revalidatePath("/ordenes");
   revalidatePath("/dashboard");
   revalidatePath("/historial");
+  revalidatePath("/herramientas");
+  revalidatePath("/materiales");
 
   return { success: true };
 }
@@ -195,7 +296,7 @@ export async function updateOrderStatusAction(formData: FormData) {
   }
 
   const allowedStatuses = [
-    "pending",
+    "new",
     "assigned",
     "in_progress",
     "completed",
@@ -207,35 +308,122 @@ export async function updateOrderStatusAction(formData: FormData) {
   }
 
   const order = await sql`
-    SELECT assigned_to
+    SELECT assigned_to, status
     FROM service_orders
     WHERE id = ${parseInt(id)}
+    LIMIT 1
   `;
 
   if (order.length === 0) {
     return { error: "Orden no encontrada" };
   }
 
-  if (user.role !== "admin" && order[0].assigned_to !== user.id) {
+  const currentOrder = order[0];
+
+  if (user.role !== "admin" && currentOrder.assigned_to !== user.id) {
     return { error: "No tiene permiso para actualizar esta orden" };
   }
 
-  const completedDate = ["completed", "cancelled"].includes(status)
-    ? new Date().toISOString()
-    : null;
+  if (
+    !currentOrder.assigned_to &&
+    ["assigned", "in_progress"].includes(status)
+  ) {
+    return {
+      error: "Debe asignar un técnico antes de cambiar a ese estado",
+    };
+  }
 
-  await sql`
-    UPDATE service_orders
-    SET 
-      status = ${status},
-      completed_date = ${completedDate},
-      updated_at = NOW()
-    WHERE id = ${parseInt(id)}
-  `;
+  if (currentOrder.assigned_to && status === "new") {
+    return {
+      error: "No puede cambiar a Nueva mientras tenga un técnico asignado",
+    };
+  }
+
+  const completedDate =
+    status === "completed" ? new Date().toISOString() : null;
+
+  if (status === "cancelled") {
+    const activeTools = await sql`
+      SELECT tool_id
+      FROM order_tools
+      WHERE order_id = ${parseInt(id)}
+        AND returned_at IS NULL
+    `;
+
+    for (const tool of activeTools) {
+      await sql`
+        UPDATE tools
+        SET
+          status = 'available',
+          updated_at = NOW()
+        WHERE id = ${tool.tool_id}
+      `;
+    }
+
+    const usedMaterials = await sql`
+      SELECT material_id, quantity_used
+      FROM order_materials
+      WHERE order_id = ${parseInt(id)}
+    `;
+
+    for (const material of usedMaterials) {
+      await sql`
+        UPDATE materials
+        SET
+          quantity_in_stock = quantity_in_stock + ${material.quantity_used},
+          updated_at = NOW()
+        WHERE id = ${material.material_id}
+      `;
+    }
+
+    await sql`
+      DELETE FROM order_tools
+      WHERE order_id = ${parseInt(id)}
+        AND returned_at IS NULL
+    `;
+
+    await sql`
+      DELETE FROM order_materials
+      WHERE order_id = ${parseInt(id)}
+    `;
+
+    await sql`
+      DELETE FROM tool_requests
+      WHERE order_id = ${parseInt(id)}
+        AND status = 'pending'
+    `;
+
+    await sql`
+      DELETE FROM material_requests
+      WHERE order_id = ${parseInt(id)}
+        AND status = 'pending'
+    `;
+
+    await sql`
+      UPDATE service_orders
+      SET 
+        status = 'cancelled',
+        assigned_to = NULL,
+        completed_date = NULL,
+        updated_at = NOW()
+      WHERE id = ${parseInt(id)}
+    `;
+  } else {
+    await sql`
+      UPDATE service_orders
+      SET 
+        status = ${status},
+        completed_date = ${completedDate},
+        updated_at = NOW()
+      WHERE id = ${parseInt(id)}
+    `;
+  }
 
   revalidatePath("/ordenes");
   revalidatePath("/dashboard");
   revalidatePath("/historial");
+  revalidatePath("/herramientas");
+  revalidatePath("/materiales");
 
   return { success: true };
 }
@@ -775,7 +963,7 @@ export async function rejectToolRequestAction(formData: FormData) {
   return { success: true };
 }
 
-//Materiales//
+// Materiales
 
 export async function requestMaterialForOrderAction(formData: FormData) {
   const user = await requireAuth();

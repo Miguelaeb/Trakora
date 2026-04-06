@@ -73,9 +73,9 @@ interface OrdersTableProps {
 }
 
 const statusLabels: Record<string, string> = {
-  pending: "Pendiente",
+  new: "Nueva",
   assigned: "Asignada",
-  in_progress: "En Progreso",
+  in_progress: "En proceso",
   completed: "Completada",
   cancelled: "Cancelada",
 };
@@ -95,7 +95,7 @@ const priorityColors: Record<string, string> = {
 };
 
 const statusColors: Record<string, string> = {
-  pending: "bg-amber-100 text-amber-800",
+  new: "bg-amber-100 text-amber-800",
   assigned: "bg-sky-100 text-sky-800",
   in_progress: "bg-blue-100 text-blue-800",
   completed: "bg-green-100 text-green-800",
@@ -151,24 +151,25 @@ export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
                 className="pl-9"
               />
             </div>
-            <div className="flex gap-2">
+
+            <div className="flex flex-col gap-2 sm:flex-row">
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-40">
-                  <SelectValue placeholder="Estado" />
+                <SelectTrigger className="w-full sm:w-44">
+                  <SelectValue placeholder="Todos los estados" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="todos">Todos los estados</SelectItem>
-                  <SelectItem value="pending">Pendiente</SelectItem>
+                  <SelectItem value="new">Nueva</SelectItem>
                   <SelectItem value="assigned">Asignada</SelectItem>
-                  <SelectItem value="in_progress">En Progreso</SelectItem>
+                  <SelectItem value="in_progress">En proceso</SelectItem>
                   <SelectItem value="completed">Completada</SelectItem>
                   <SelectItem value="cancelled">Cancelada</SelectItem>
                 </SelectContent>
               </Select>
 
               <Select value={priorityFilter} onValueChange={setPriorityFilter}>
-                <SelectTrigger className="w-36">
-                  <SelectValue placeholder="Prioridad" />
+                <SelectTrigger className="w-full sm:w-36">
+                  <SelectValue placeholder="Todas" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="todos">Todas</SelectItem>
@@ -271,21 +272,35 @@ export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
                         >
                           <SelectTrigger className="h-7 w-32 text-xs">
                             <Badge
-                              className={`${statusColors[order.status]} border-0`}
+                              className={`${statusColors[order.status] || "bg-muted text-muted-foreground"} border-0`}
                             >
-                              {statusLabels[order.status]}
+                              {statusLabels[order.status] || order.status}
                             </Badge>
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="pending">Pendiente</SelectItem>
-                            <SelectItem value="assigned">Asignada</SelectItem>
-                            <SelectItem value="in_progress">
-                              En Progreso
-                            </SelectItem>
-                            <SelectItem value="completed">
-                              Completada
-                            </SelectItem>
-                            <SelectItem value="cancelled">Cancelada</SelectItem>
+                            {!order.technician_name ? (
+                              <>
+                                <SelectItem value="new">Nueva</SelectItem>
+                                <SelectItem value="cancelled">
+                                  Cancelada
+                                </SelectItem>
+                              </>
+                            ) : (
+                              <>
+                                <SelectItem value="assigned">
+                                  Asignada
+                                </SelectItem>
+                                <SelectItem value="in_progress">
+                                  En proceso
+                                </SelectItem>
+                                <SelectItem value="completed">
+                                  Completada
+                                </SelectItem>
+                                <SelectItem value="cancelled">
+                                  Cancelada
+                                </SelectItem>
+                              </>
+                            )}
                           </SelectContent>
                         </Select>
                       </TableCell>
@@ -367,7 +382,7 @@ export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
                             <DropdownMenuItem asChild>
                               <Link href={`/ordenes/${order.id}`}>
                                 <Eye className="mr-2 size-4" />
-                                Ver Detalles
+                                Ver detalles
                               </Link>
                             </DropdownMenuItem>
 

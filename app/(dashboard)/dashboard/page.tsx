@@ -26,28 +26,58 @@ async function getStats(userId: number, isAdmin: boolean) {
   const [ordersStats, toolsStats, materialsStats, techniciansCount] =
     await Promise.all([
       sql`
-  SELECT 
-    COUNT(*) FILTER (WHERE status = 'pending') as pendientes,
-    COUNT(*) FILTER (WHERE status IN ('assigned', 'in_progress')) as en_progreso,
-    COUNT(*) FILTER (WHERE status = 'completed') as completadas,
-    COUNT(*) FILTER (WHERE priority = 'urgente' AND status IN ('pending', 'assigned', 'in_progress')) as urgentes
-  FROM service_orders
-  ${isAdmin ? sql`` : sql`WHERE assigned_to = ${userId}`}
-`,
+        SELECT 
+          COUNT(*) FILTER (WHERE status IN ('new', 'assigned')) AS pendientes,
+          COUNT(*) FILTER (WHERE status = 'in_progress') AS en_progreso,
+          COUNT(*) FILTER (WHERE status = 'completed') AS completadas,
+          COUNT(*) FILTER (
+            WHERE priority = 'urgente'
+              AND status IN ('new', 'assigned', 'in_progress')
+          ) AS urgentes
+        FROM service_orders
+        ${isAdmin ? sql`` : sql`WHERE assigned_to = ${userId}`}
+      `,
+
       isAdmin
         ? sql`
-          SELECT 
-            COUNT(*) FILTER (WHERE status = 'disponible') as disponibles,
-            COUNT(*) FILTER (WHERE status = 'en_uso') as en_uso,
-            COUNT(*) FILTER (WHERE status = 'mantenimiento') as mantenimiento
-          FROM tools
-        `
-        : Promise.resolve([{ disponibles: 0, en_uso: 0, mantenimiento: 0 }]),
+            SELECT 
+              COUNT(*) AS total,
+              COUNT(*) FILTER (WHERE status = 'available') AS disponibles,
+              COUNT(*) FILTER (WHERE status = 'in_use') AS en_uso,
+              COUNT(*) FILTER (WHERE status = 'maintenance') AS mantenimiento
+            FROM tools
+          `
+        : Promise.resolve([
+            {
+              total: 0,
+              disponibles: 0,
+              en_uso: 0,
+              mantenimiento: 0,
+            },
+          ]),
+
       isAdmin
-        ? sql`SELECT COUNT(*) as bajo_stock FROM materials WHERE quantity_in_stock <= min_stock_level`
-        : Promise.resolve([{ bajo_stock: 0 }]),
+        ? sql`
+            SELECT
+              COUNT(*) AS total,
+              COUNT(*) FILTER (
+                WHERE quantity_in_stock <= min_stock_level
+              ) AS bajo_stock
+            FROM materials
+          `
+        : Promise.resolve([
+            {
+              total: 0,
+              bajo_stock: 0,
+            },
+          ]),
+
       isAdmin
-        ? sql`SELECT COUNT(*) as total FROM users WHERE role = 'technician' AND active = true`
+        ? sql`
+            SELECT COUNT(*) AS total
+            FROM users
+            WHERE role = 'technician' AND active = true
+          `
         : Promise.resolve([{ total: 0 }]),
     ]);
 
@@ -86,10 +116,11 @@ async function getRecentOrders(userId: number, isAdmin: boolean) {
 }
 
 const statusLabels: Record<string, string> = {
-  pending: "Pendiente",
+  new: "Nueva",
   assigned: "Asignada",
   in_progress: "En Progreso",
   completed: "Completada",
+  cancelled: "Cancelada",
 };
 
 const priorityLabels: Record<string, string> = {
@@ -107,10 +138,11 @@ const priorityColors: Record<string, string> = {
 };
 
 const statusColors: Record<string, string> = {
-  pending: "bg-amber-100 text-amber-800",
+  new: "bg-amber-100 text-amber-800",
   assigned: "bg-sky-100 text-sky-800",
   in_progress: "bg-blue-100 text-blue-800",
   completed: "bg-green-100 text-green-800",
+  cancelled: "bg-red-100 text-red-800",
 };
 
 export default async function DashboardPage() {
@@ -141,15 +173,13 @@ export default async function DashboardPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium">
-              Órdenes Pendientes
+              Órdenes Activas
             </CardTitle>
             <Clock className="size-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stats.orders.pendientes}</div>
-            <p className="text-xs text-muted-foreground">
-              Esperando asignación o inicio
-            </p>
+            <p className="text-xs text-muted-foreground">Nuevas o asignadas</p>
           </CardContent>
         </Card>
 
@@ -219,9 +249,7 @@ export default async function DashboardPage() {
               <Wrench className="size-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">
-                {stats.tools.disponibles}
-              </div>
+              <div className="text-2xl font-bold">{stats.tools.total}</div>
               <p className="text-xs text-muted-foreground">
                 {stats.tools.en_uso} en uso, {stats.tools.mantenimiento} en
                 mantenimiento
@@ -235,10 +263,10 @@ export default async function DashboardPage() {
               <Package className="size-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">
-                {stats.materials.bajo_stock}
-              </div>
-              <p className="text-xs text-muted-foreground">Con stock bajo</p>
+              <div className="text-2xl font-bold">{stats.materials.total}</div>
+              <p className="text-xs text-muted-foreground">
+                {stats.materials.bajo_stock} con stock bajo
+              </p>
             </CardContent>
           </Card>
         </div>
@@ -255,7 +283,7 @@ export default async function DashboardPage() {
         </CardHeader>
         <CardContent>
           {recentOrders.length === 0 ? (
-            <p className="text-center text-muted-foreground py-8">
+            <p className="py-8 text-center text-muted-foreground">
               No hay órdenes recientes
             </p>
           ) : (
@@ -269,7 +297,7 @@ export default async function DashboardPage() {
                     <div className="flex items-center gap-2">
                       <span className="font-medium">{order.order_number}</span>
                       <span
-                        className={`px-2 py-0.5 rounded-full text-xs font-medium ${priorityColors[order.priority]}`}
+                        className={`rounded-full px-2 py-0.5 text-xs font-medium ${priorityColors[order.priority]}`}
                       >
                         {priorityLabels[order.priority]}
                       </span>
@@ -277,11 +305,11 @@ export default async function DashboardPage() {
                     <p className="text-sm text-muted-foreground">
                       {order.client_name}
                     </p>
-                    <p className="text-sm line-clamp-1">{order.description}</p>
+                    <p className="line-clamp-1 text-sm">{order.description}</p>
                   </div>
-                  <div className="text-right space-y-1">
+                  <div className="space-y-1 text-right">
                     <span
-                      className={`px-2 py-1 rounded-full text-xs font-medium ${statusColors[order.status]}`}
+                      className={`rounded-full px-2 py-1 text-xs font-medium ${statusColors[order.status]}`}
                     >
                       {statusLabels[order.status]}
                     </span>
