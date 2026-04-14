@@ -11,7 +11,6 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@/components/ui/select";
 import {
   Table,
@@ -72,7 +71,14 @@ interface OrdersTableProps {
   isAdmin: boolean;
 }
 
-const statusLabels: Record<string, string> = {
+type OrderStatus =
+  | "new"
+  | "assigned"
+  | "in_progress"
+  | "completed"
+  | "cancelled";
+
+const statusLabels: Record<OrderStatus, string> = {
   new: "Nueva",
   assigned: "Asignada",
   in_progress: "En proceso",
@@ -94,13 +100,51 @@ const priorityColors: Record<string, string> = {
   urgente: "bg-red-100 text-red-800",
 };
 
-const statusColors: Record<string, string> = {
+const statusColors: Record<OrderStatus, string> = {
   new: "bg-amber-100 text-amber-800",
   assigned: "bg-sky-100 text-sky-800",
   in_progress: "bg-blue-100 text-blue-800",
   completed: "bg-green-100 text-green-800",
   cancelled: "bg-red-100 text-red-800",
 };
+
+function isValidOrderStatus(status: string): status is OrderStatus {
+  return ["new", "assigned", "in_progress", "completed", "cancelled"].includes(
+    status,
+  );
+}
+
+function getAllowedStatuses(
+  currentStatus: OrderStatus,
+  isAdmin: boolean,
+  hasTechnician: boolean,
+): OrderStatus[] {
+  if (isAdmin) {
+    if (!hasTechnician) {
+      if (currentStatus === "new") return ["new", "cancelled"];
+      if (currentStatus === "cancelled") return ["cancelled"];
+      return [currentStatus];
+    }
+
+    if (currentStatus === "new") return ["new", "assigned", "cancelled"];
+    if (currentStatus === "assigned")
+      return ["assigned", "in_progress", "cancelled"];
+    if (currentStatus === "in_progress")
+      return ["in_progress", "completed", "cancelled"];
+    if (currentStatus === "completed") return ["completed"];
+    if (currentStatus === "cancelled") return ["cancelled"];
+
+    return [currentStatus];
+  }
+
+  if (currentStatus === "assigned") return ["assigned", "in_progress"];
+  if (currentStatus === "in_progress") return ["in_progress", "completed"];
+  if (currentStatus === "completed") return ["completed"];
+  if (currentStatus === "cancelled") return ["cancelled"];
+  if (currentStatus === "new") return ["new"];
+
+  return [currentStatus];
+}
 
 export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
   const [search, setSearch] = useState("");
@@ -124,16 +168,38 @@ export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
 
   const handleDelete = async () => {
     if (!deleteId) return;
+
     const formData = new FormData();
     formData.set("id", deleteId.toString());
     await deleteOrderAction(formData);
     setDeleteId(null);
   };
 
-  const handleStatusChange = async (orderId: number, newStatus: string) => {
+  const handleStatusChange = async (
+    orderId: number,
+    currentStatus: OrderStatus,
+    newStatus: string,
+    hasTechnician: boolean,
+  ) => {
+    if (!isValidOrderStatus(newStatus)) return;
+
+    const allowedStatuses = getAllowedStatuses(
+      currentStatus,
+      isAdmin,
+      hasTechnician,
+    );
+
+    if (!allowedStatuses.includes(newStatus)) {
+      alert("No tienes permiso para realizar este cambio de estado.");
+      return;
+    }
+
+    if (currentStatus === newStatus) return;
+
     const formData = new FormData();
     formData.set("id", orderId.toString());
     formData.set("status", newStatus);
+
     await updateOrderStatusAction(formData);
   };
 
@@ -155,7 +221,9 @@ export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
             <div className="flex flex-col gap-2 sm:flex-row">
               <Select value={statusFilter} onValueChange={setStatusFilter}>
                 <SelectTrigger className="w-full sm:w-44">
-                  <SelectValue placeholder="Todos los estados" />
+                  {statusFilter === "todos"
+                    ? "Todos los estados"
+                    : statusLabels[statusFilter as OrderStatus] || "Estado"}
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="todos">Todos los estados</SelectItem>
@@ -169,7 +237,9 @@ export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
 
               <Select value={priorityFilter} onValueChange={setPriorityFilter}>
                 <SelectTrigger className="w-full sm:w-36">
-                  <SelectValue placeholder="Todas" />
+                  {priorityFilter === "todos"
+                    ? "Todas"
+                    : priorityLabels[priorityFilter] || "Prioridad"}
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="todos">Todas</SelectItem>
@@ -226,6 +296,19 @@ export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
                     pendingTools + pendingMaterials + pendingReturns;
                   const hasPending = totalPending > 0;
 
+                  const currentStatus: OrderStatus = isValidOrderStatus(
+                    order.status,
+                  )
+                    ? order.status
+                    : "new";
+
+                  const hasTechnician = Boolean(order.technician_name);
+                  const allowedStatuses = getAllowedStatuses(
+                    currentStatus,
+                    isAdmin,
+                    hasTechnician,
+                  );
+
                   return (
                     <TableRow
                       key={order.id}
@@ -261,55 +344,40 @@ export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
 
                       <TableCell>
                         <Select
-                          value={order.status}
+                          value={currentStatus}
                           onValueChange={(value) =>
-                            handleStatusChange(order.id, value)
+                            handleStatusChange(
+                              order.id,
+                              currentStatus,
+                              value,
+                              hasTechnician,
+                            )
                           }
-                          disabled={
-                            !isAdmin &&
-                            ["completed", "cancelled"].includes(order.status)
-                          }
+                          disabled={allowedStatuses.length <= 1}
                         >
                           <SelectTrigger className="h-7 w-32 text-xs">
                             <Badge
-                              className={`${statusColors[order.status] || "bg-muted text-muted-foreground"} border-0`}
+                              className={`${statusColors[currentStatus]} border-0`}
                             >
-                              {statusLabels[order.status] || order.status}
+                              {statusLabels[currentStatus]}
                             </Badge>
                           </SelectTrigger>
+
                           <SelectContent>
-                            {!order.technician_name ? (
-                              <>
-                                <SelectItem value="new">Nueva</SelectItem>
-                                <SelectItem value="cancelled">
-                                  Cancelada
-                                </SelectItem>
-                              </>
-                            ) : (
-                              <>
-                                <SelectItem value="assigned">
-                                  Asignada
-                                </SelectItem>
-                                <SelectItem value="in_progress">
-                                  En proceso
-                                </SelectItem>
-                                <SelectItem value="completed">
-                                  Completada
-                                </SelectItem>
-                                <SelectItem value="cancelled">
-                                  Cancelada
-                                </SelectItem>
-                              </>
-                            )}
+                            {allowedStatuses.map((status) => (
+                              <SelectItem key={status} value={status}>
+                                {statusLabels[status]}
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                       </TableCell>
 
                       <TableCell>
                         <Badge
-                          className={`${priorityColors[order.priority]} border-0`}
+                          className={`${priorityColors[order.priority] || "bg-muted text-muted-foreground"} border-0`}
                         >
-                          {priorityLabels[order.priority]}
+                          {priorityLabels[order.priority] || order.priority}
                         </Badge>
                       </TableCell>
 
@@ -325,7 +393,7 @@ export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
                         {hasPending ? (
                           <div className="flex flex-wrap gap-2">
                             {pendingMaterials > 0 && (
-                              <Badge className="bg-amber-100 text-amber-800 border-0">
+                              <Badge className="border-0 bg-amber-100 text-amber-800">
                                 <Package className="mr-1 size-3" />
                                 {pendingMaterials} material
                                 {pendingMaterials > 1 ? "es" : ""}
@@ -333,7 +401,7 @@ export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
                             )}
 
                             {pendingTools > 0 && (
-                              <Badge className="bg-sky-100 text-sky-800 border-0">
+                              <Badge className="border-0 bg-sky-100 text-sky-800">
                                 <Wrench className="mr-1 size-3" />
                                 {pendingTools} herramienta
                                 {pendingTools > 1 ? "s" : ""}
@@ -341,7 +409,7 @@ export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
                             )}
 
                             {pendingReturns > 0 && (
-                              <Badge className="bg-orange-100 text-orange-800 border-0">
+                              <Badge className="border-0 bg-orange-100 text-orange-800">
                                 <RotateCcw className="mr-1 size-3" />
                                 {pendingReturns} devolución
                                 {pendingReturns > 1 ? "es" : ""}

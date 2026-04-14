@@ -5,6 +5,13 @@ import { requireAuth, requireAdmin } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
+type OrderStatus =
+  | "new"
+  | "assigned"
+  | "in_progress"
+  | "completed"
+  | "cancelled";
+
 function generateOrderNumber(): string {
   const now = new Date();
   const year = now.getFullYear();
@@ -14,6 +21,44 @@ function generateOrderNumber(): string {
     .toString()
     .padStart(3, "0");
   return `OS-${year}${month}${day}-${random}`;
+}
+
+function isValidOrderStatus(status: string): status is OrderStatus {
+  return ["new", "assigned", "in_progress", "completed", "cancelled"].includes(
+    status,
+  );
+}
+
+function getAllowedStatusesForRole(
+  currentStatus: OrderStatus,
+  isAdmin: boolean,
+  hasTechnician: boolean,
+): OrderStatus[] {
+  if (isAdmin) {
+    if (!hasTechnician) {
+      if (currentStatus === "new") return ["new", "cancelled"];
+      if (currentStatus === "cancelled") return ["cancelled"];
+      return [currentStatus];
+    }
+
+    if (currentStatus === "new") return ["new", "assigned", "cancelled"];
+    if (currentStatus === "assigned")
+      return ["assigned", "in_progress", "cancelled"];
+    if (currentStatus === "in_progress")
+      return ["in_progress", "completed", "cancelled"];
+    if (currentStatus === "completed") return ["completed"];
+    if (currentStatus === "cancelled") return ["cancelled"];
+
+    return [currentStatus];
+  }
+
+  if (currentStatus === "assigned") return ["assigned", "in_progress"];
+  if (currentStatus === "in_progress") return ["in_progress", "completed"];
+  if (currentStatus === "completed") return ["completed"];
+  if (currentStatus === "cancelled") return ["cancelled"];
+  if (currentStatus === "new") return ["new"];
+
+  return [currentStatus];
 }
 
 export async function createOrderAction(_prevState: any, formData: FormData) {
@@ -95,15 +140,7 @@ export async function updateOrderAction(_prevState: any, formData: FormData) {
     return { error: "Por favor complete los campos requeridos" };
   }
 
-  const allowedStatuses = [
-    "new",
-    "assigned",
-    "in_progress",
-    "completed",
-    "cancelled",
-  ];
-
-  if (!allowedStatuses.includes(submittedStatus)) {
+  if (!isValidOrderStatus(submittedStatus)) {
     return { error: "Estado inválido" };
   }
 
@@ -125,7 +162,7 @@ export async function updateOrderAction(_prevState: any, formData: FormData) {
     return { error: "Orden no encontrada" };
   }
 
-  let finalStatus = submittedStatus;
+  let finalStatus: OrderStatus = submittedStatus;
 
   if (finalStatus === "cancelled") {
     assignedTo = null;
@@ -174,9 +211,36 @@ export async function updateOrderAction(_prevState: any, formData: FormData) {
 }
 
 export async function completeOrderAction(formData: FormData) {
-  await requireAuth();
+  const user = await requireAuth();
 
   const id = Number(formData.get("id"));
+
+  if (!id || Number.isNaN(id)) {
+    return { error: "ID inválido" };
+  }
+
+  const order = await sql`
+    SELECT id, assigned_to, status
+    FROM service_orders
+    WHERE id = ${id}
+    LIMIT 1
+  `;
+
+  if (order.length === 0) {
+    return { error: "Orden no encontrada" };
+  }
+
+  const currentOrder = order[0];
+
+  if (user.role !== "admin" && currentOrder.assigned_to !== user.id) {
+    return { error: "No tiene permiso para completar esta orden" };
+  }
+
+  if (currentOrder.status !== "in_progress") {
+    return {
+      error: "Solo se puede completar una orden que esté en proceso",
+    };
+  }
 
   await sql`
     UPDATE service_orders
@@ -195,12 +259,16 @@ export async function completeOrderAction(formData: FormData) {
 }
 
 export async function cancelOrderAction(formData: FormData) {
-  await requireAuth();
+  await requireAdmin();
 
   const id = Number(formData.get("id"));
 
+  if (!id || Number.isNaN(id)) {
+    return { error: "ID inválido" };
+  }
+
   const order = await sql`
-    SELECT id
+    SELECT id, status
     FROM service_orders
     WHERE id = ${id}
     LIMIT 1
@@ -208,6 +276,10 @@ export async function cancelOrderAction(formData: FormData) {
 
   if (order.length === 0) {
     return { error: "Orden no encontrada" };
+  }
+
+  if (order[0].status === "completed") {
+    return { error: "No se puede cancelar una orden completada" };
   }
 
   const activeTools = await sql`
@@ -289,28 +361,26 @@ export async function updateOrderStatusAction(formData: FormData) {
   const user = await requireAuth();
 
   const id = formData.get("id") as string;
-  const status = formData.get("status") as string;
+  const newStatusRaw = formData.get("status") as string;
 
-  if (!id || !status) {
+  if (!id || !newStatusRaw) {
     return { error: "Datos inválidos" };
   }
 
-  const allowedStatuses = [
-    "new",
-    "assigned",
-    "in_progress",
-    "completed",
-    "cancelled",
-  ];
+  const orderId = parseInt(id);
 
-  if (!allowedStatuses.includes(status)) {
+  if (Number.isNaN(orderId)) {
+    return { error: "ID inválido" };
+  }
+
+  if (!isValidOrderStatus(newStatusRaw)) {
     return { error: "Estado inválido" };
   }
 
   const order = await sql`
-    SELECT assigned_to, status
+    SELECT id, assigned_to, status
     FROM service_orders
-    WHERE id = ${parseInt(id)}
+    WHERE id = ${orderId}
     LIMIT 1
   `;
 
@@ -319,34 +389,59 @@ export async function updateOrderStatusAction(formData: FormData) {
   }
 
   const currentOrder = order[0];
+  const currentStatus = currentOrder.status as OrderStatus;
+  const isAdmin = user.role === "admin";
+  const hasTechnician = Boolean(currentOrder.assigned_to);
 
-  if (user.role !== "admin" && currentOrder.assigned_to !== user.id) {
+  if (!isAdmin && currentOrder.assigned_to !== user.id) {
     return { error: "No tiene permiso para actualizar esta orden" };
   }
 
+  const allowedStatuses = getAllowedStatusesForRole(
+    currentStatus,
+    isAdmin,
+    hasTechnician,
+  );
+
+  if (!allowedStatuses.includes(newStatusRaw)) {
+    return { error: "No tiene permiso para realizar este cambio de estado" };
+  }
+
+  if (currentStatus === newStatusRaw) {
+    return { success: true };
+  }
+
   if (
-    !currentOrder.assigned_to &&
-    ["assigned", "in_progress"].includes(status)
+    !hasTechnician &&
+    ["assigned", "in_progress", "completed"].includes(newStatusRaw)
   ) {
     return {
       error: "Debe asignar un técnico antes de cambiar a ese estado",
     };
   }
 
-  if (currentOrder.assigned_to && status === "new") {
+  if (!isAdmin && newStatusRaw === "cancelled") {
+    return { error: "Solo el administrador puede cancelar órdenes" };
+  }
+
+  if (
+    !isAdmin &&
+    currentStatus === "assigned" &&
+    newStatusRaw === "completed"
+  ) {
     return {
-      error: "No puede cambiar a Nueva mientras tenga un técnico asignado",
+      error: "El técnico debe pasar la orden a En proceso antes de completarla",
     };
   }
 
   const completedDate =
-    status === "completed" ? new Date().toISOString() : null;
+    newStatusRaw === "completed" ? new Date().toISOString() : null;
 
-  if (status === "cancelled") {
+  if (newStatusRaw === "cancelled") {
     const activeTools = await sql`
       SELECT tool_id
       FROM order_tools
-      WHERE order_id = ${parseInt(id)}
+      WHERE order_id = ${orderId}
         AND returned_at IS NULL
     `;
 
@@ -363,7 +458,7 @@ export async function updateOrderStatusAction(formData: FormData) {
     const usedMaterials = await sql`
       SELECT material_id, quantity_used
       FROM order_materials
-      WHERE order_id = ${parseInt(id)}
+      WHERE order_id = ${orderId}
     `;
 
     for (const material of usedMaterials) {
@@ -378,24 +473,24 @@ export async function updateOrderStatusAction(formData: FormData) {
 
     await sql`
       DELETE FROM order_tools
-      WHERE order_id = ${parseInt(id)}
+      WHERE order_id = ${orderId}
         AND returned_at IS NULL
     `;
 
     await sql`
       DELETE FROM order_materials
-      WHERE order_id = ${parseInt(id)}
+      WHERE order_id = ${orderId}
     `;
 
     await sql`
       DELETE FROM tool_requests
-      WHERE order_id = ${parseInt(id)}
+      WHERE order_id = ${orderId}
         AND status = 'pending'
     `;
 
     await sql`
       DELETE FROM material_requests
-      WHERE order_id = ${parseInt(id)}
+      WHERE order_id = ${orderId}
         AND status = 'pending'
     `;
 
@@ -406,16 +501,16 @@ export async function updateOrderStatusAction(formData: FormData) {
         assigned_to = NULL,
         completed_date = NULL,
         updated_at = NOW()
-      WHERE id = ${parseInt(id)}
+      WHERE id = ${orderId}
     `;
   } else {
     await sql`
       UPDATE service_orders
       SET 
-        status = ${status},
+        status = ${newStatusRaw},
         completed_date = ${completedDate},
         updated_at = NOW()
-      WHERE id = ${parseInt(id)}
+      WHERE id = ${orderId}
     `;
   }
 

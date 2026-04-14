@@ -97,10 +97,7 @@ export default async function OrderReportPage({ params }: PageProps) {
       <div className="bg-background border rounded-lg p-8 print:border-0 print:p-0">
         {/* Header */}
         <div className="text-center border-b pb-6 mb-6">
-          <h1 className="text-2xl font-bold">TRAKORA</h1>
-          <p className="text-muted-foreground">
-            Sistema de Gestión de Órdenes de Servicio
-          </p>
+          <h1 className="text-2xl font-bold">Horse Power SRL</h1>
           <p className="text-lg font-semibold mt-4">
             Orden de Servicio: {order.order_number}
           </p>
