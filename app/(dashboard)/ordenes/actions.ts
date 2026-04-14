@@ -242,6 +242,21 @@ export async function completeOrderAction(formData: FormData) {
     };
   }
 
+  const pendingTools = await sql`
+    SELECT id
+    FROM order_tools
+    WHERE order_id = ${id}
+      AND returned_at IS NULL
+    LIMIT 1
+  `;
+
+  if (pendingTools.length > 0) {
+    return {
+      error:
+        "No se puede completar la orden porque aún tiene herramientas pendientes de devolución",
+    };
+  }
+
   await sql`
     UPDATE service_orders
     SET 
@@ -432,6 +447,23 @@ export async function updateOrderStatusAction(formData: FormData) {
     return {
       error: "El técnico debe pasar la orden a En proceso antes de completarla",
     };
+  }
+
+  if (newStatusRaw === "completed") {
+    const pendingTools = await sql`
+      SELECT id
+      FROM order_tools
+      WHERE order_id = ${orderId}
+        AND returned_at IS NULL
+      LIMIT 1
+    `;
+
+    if (pendingTools.length > 0) {
+      return {
+        error:
+          "No se puede completar la orden porque aún tiene herramientas pendientes de devolución",
+      };
+    }
   }
 
   const completedDate =
