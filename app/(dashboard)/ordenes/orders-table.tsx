@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Select,
   SelectContent,
@@ -36,6 +37,8 @@ import {
   Wrench,
   Package,
   RotateCcw,
+  CheckCircle2,
+  X,
 } from "lucide-react";
 import { deleteOrderAction, updateOrderStatusAction } from "./actions";
 import {
@@ -77,6 +80,12 @@ type OrderStatus =
   | "in_progress"
   | "completed"
   | "cancelled";
+
+type FeedbackState = {
+  type: "error" | "success" | "warning";
+  title: string;
+  message: string;
+} | null;
 
 const statusLabels: Record<OrderStatus, string> = {
   new: "Nueva",
@@ -146,11 +155,24 @@ function getAllowedStatuses(
   return [currentStatus];
 }
 
+function getAlertClasses(type: FeedbackState["type"]) {
+  switch (type) {
+    case "success":
+      return "border-green-300 bg-green-50 text-green-900";
+    case "warning":
+      return "border-amber-300 bg-amber-50 text-amber-900";
+    case "error":
+    default:
+      return "border-red-300 bg-red-50 text-red-900";
+  }
+}
+
 export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("todos");
   const [priorityFilter, setPriorityFilter] = useState<string>("todos");
   const [deleteId, setDeleteId] = useState<number | null>(null);
+  const [feedback, setFeedback] = useState<FeedbackState>(null);
 
   const filteredOrders = orders.filter((order) => {
     const matchesSearch =
@@ -166,13 +188,27 @@ export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
     return matchesSearch && matchesStatus && matchesPriority;
   });
 
+  const clearFeedback = () => setFeedback(null);
+
   const handleDelete = async () => {
     if (!deleteId) return;
 
     const formData = new FormData();
     formData.set("id", deleteId.toString());
-    await deleteOrderAction(formData);
+
+    const result = await deleteOrderAction(formData);
+
+    if (result?.error) {
+      setFeedback({
+        type: "error",
+        title: "No se pudo eliminar la orden",
+        message: result.error,
+      });
+      return;
+    }
+
     setDeleteId(null);
+    clearFeedback();
   };
 
   const handleStatusChange = async (
@@ -180,6 +216,7 @@ export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
     currentStatus: OrderStatus,
     newStatus: string,
     hasTechnician: boolean,
+    pendingReturns: number,
   ) => {
     if (!isValidOrderStatus(newStatus)) return;
 
@@ -190,17 +227,42 @@ export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
     );
 
     if (!allowedStatuses.includes(newStatus)) {
-      alert("No tienes permiso para realizar este cambio de estado.");
+      setFeedback({
+        type: "error",
+        title: "Acción no permitida",
+        message: "No tienes permiso para realizar este cambio de estado.",
+      });
       return;
     }
 
     if (currentStatus === newStatus) return;
 
+    if (newStatus === "completed" && pendingReturns > 0) {
+      setFeedback({
+        type: "warning",
+        title: "No se puede completar la orden",
+        message:
+          "Aún hay herramientas pendientes de devolución. Debes devolverlas antes de marcar esta orden como completada.",
+      });
+      return;
+    }
+
     const formData = new FormData();
     formData.set("id", orderId.toString());
     formData.set("status", newStatus);
 
-    await updateOrderStatusAction(formData);
+    const result = await updateOrderStatusAction(formData);
+
+    if (result?.error) {
+      setFeedback({
+        type: "error",
+        title: "No se pudo actualizar el estado",
+        message: result.error,
+      });
+      return;
+    }
+
+    clearFeedback();
   };
 
   return (
@@ -254,7 +316,35 @@ export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
         </CardContent>
       </Card>
 
-      <Card>
+      {feedback && (
+        <Alert className={`mt-4 ${getAlertClasses(feedback.type)}`}>
+          {feedback.type === "success" ? (
+            <CheckCircle2 className="h-4 w-4" />
+          ) : (
+            <AlertTriangle className="h-4 w-4" />
+          )}
+
+          <div className="flex w-full items-start justify-between gap-4">
+            <div className="min-w-0">
+              <AlertTitle>{feedback.title}</AlertTitle>
+              <AlertDescription>{feedback.message}</AlertDescription>
+            </div>
+
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0"
+              onClick={clearFeedback}
+            >
+              <X className="h-4 w-4" />
+              <span className="sr-only">Cerrar alerta</span>
+            </Button>
+          </div>
+        </Alert>
+      )}
+
+      <Card className="mt-4">
         <CardContent className="p-0">
           <Table>
             <TableHeader>
@@ -351,6 +441,7 @@ export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
                               currentStatus,
                               value,
                               hasTechnician,
+                              pendingReturns,
                             )
                           }
                           disabled={allowedStatuses.length <= 1}
@@ -409,11 +500,18 @@ export function OrdersTable({ orders, isAdmin }: OrdersTableProps) {
                             )}
 
                             {pendingReturns > 0 && (
-                              <Badge className="border-0 bg-orange-100 text-orange-800">
-                                <RotateCcw className="mr-1 size-3" />
-                                {pendingReturns} devolución
-                                {pendingReturns > 1 ? "es" : ""}
-                              </Badge>
+                              <div className="flex flex-col gap-1">
+                                <Badge className="border-0 bg-orange-100 text-orange-800">
+                                  <RotateCcw className="mr-1 size-3" />
+                                  {pendingReturns} devolución
+                                  {pendingReturns > 1 ? "es" : ""}
+                                </Badge>
+
+                                <span className="text-xs font-medium text-red-600">
+                                  No se puede completar hasta devolver la
+                                  herramienta
+                                </span>
+                              </div>
                             )}
 
                             {isAdmin && (
