@@ -51,7 +51,6 @@ export function LoginForm() {
                 id="email"
                 name="email"
                 type="email"
-                placeholder="ejemplo@trakora.com"
                 autoComplete="email"
                 required
                 disabled={isPending}
@@ -64,7 +63,6 @@ export function LoginForm() {
                 id="password"
                 name="password"
                 type="password"
-                placeholder="••••••••"
                 autoComplete="current-password"
                 required
                 disabled={isPending}
